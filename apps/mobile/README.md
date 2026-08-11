@@ -1,56 +1,144 @@
-# Welcome to your Expo app 👋
+# SwissWallet 🇨🇭
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+SwissWallet is a modern non-custodial crypto wallet built with React Native and Expo.
 
-## Get started
+The project is focused on security, simplicity, and a premium Swiss FinTech user experience.
 
-1. Install dependencies
+> SwissWallet is currently under active development.
 
-   ```bash
-   npm install
-   ```
+## Tech Stack
 
-2. Start the app
+- React Native
+- Expo SDK 57
+- Expo Router
+- TypeScript
+- pnpm
+- Monorepo architecture
 
-   ```bash
-   npx expo start
-   ```
+## Project Structure
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
+```text
+swisswallet/
+├── apps/
+│   └── mobile/          # React Native / Expo application
+│
+├── packages/            # Shared packages and wallet modules
+│
+├── package.json
+├── pnpm-lock.yaml
+└── pnpm-workspace.yaml
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Getting Started
 
-### Other setup steps
+### 1. Install dependencies
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+From the repository root:
 
-## Learn more
+```bash
+pnpm install
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+### 2. Start the mobile application
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+```bash
+cd apps/mobile
+pnpm start
+```
 
-## Join the community
+Or launch a platform directly:
 
-Join our community of developers creating universal apps.
+```bash
+pnpm run ios
+```
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+```bash
+pnpm run android
+```
+
+```bash
+pnpm run web
+```
+
+## Development
+
+The mobile application uses Expo Router with file-based routing.
+
+Application routes are located in:
+
+```text
+apps/mobile/src/app/
+```
+
+The project currently targets iOS first, with Android support planned as part of the same React Native codebase.
+
+## V1 Scope
+
+SwissWallet V1 will focus on the core non-custodial wallet experience:
+
+- Create wallet
+- Import existing wallet
+- Secure local key storage
+- Biometric authentication
+- Portfolio balance in CHF
+- Asset balances
+- Send crypto
+- Receive crypto with QR codes
+- Transaction history
+- Wallet backup and security settings
+
+Private keys and recovery secrets must never be transmitted to the SwissWallet backend.
+
+Transaction signing is performed locally on the user's device.
+
+## Architecture
+
+```text
+Mobile App
+    │
+    ├── Wallet Core
+    │     ├── Key management
+    │     ├── Address generation
+    │     └── Transaction signing
+    │
+    └── SwissWallet API
+          ├── Market data
+          ├── Blockchain data
+          └── External providers
+```
+
+Future shared wallet logic and TypeScript packages will live under:
+
+```text
+packages/
+```
+
+## Security
+
+Security is a core requirement of SwissWallet.
+
+The project follows several fundamental principles:
+
+- Non-custodial architecture
+- No private keys on the backend
+- No recovery phrase logging
+- Local transaction signing
+- Secure device storage
+- Biometric protection where available
+- No secrets committed to Git
+
+## Status
+
+🚧 **SwissWallet V1 — Foundation / Active Development**
+
+Current development environment:
+
+- Expo SDK 57
+- React Native
+- TypeScript
+- pnpm workspace
+- iOS Simulator
+
+## License
+
+Private project. All rights reserved.
