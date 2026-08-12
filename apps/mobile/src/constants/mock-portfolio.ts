@@ -4,13 +4,6 @@
  * to give the redesigned screens realistic-looking content to lay out.
  */
 
-export const mockPortfolio = {
-  totalBalanceChf: 'CHF 24,568.20',
-  changePercent: '+2.45%',
-  changeWindowLabel: '(24h)',
-  isPositive: true,
-};
-
 // Preset points (0-1) for the compact portfolio line chart. A gentle upward
 // drift with light, realistic noise — not derived from any real price series.
 export const mockChartValues = [
@@ -25,9 +18,6 @@ export type MockAsset = {
   name: string;
   quantity: number;
   amountLabel: string;
-  valueLabel: string;
-  changeLabel: string;
-  isPositive: boolean;
 };
 
 // Renders a raw quantity the same way the previous hand-typed amountLabel
@@ -47,35 +37,23 @@ export const mockAssets: MockAsset[] = [
     name: 'Bitcoin',
     quantity: 0.5123,
     amountLabel: formatAmountLabel('BTC', 0.5123, 4),
-    valueLabel: 'CHF 16,245.80',
-    changeLabel: '+1.35%',
-    isPositive: true,
   },
   {
     symbol: 'ETH',
     name: 'Ethereum',
     quantity: 2.1456,
     amountLabel: formatAmountLabel('ETH', 2.1456, 4),
-    valueLabel: 'CHF 4,352.70',
-    changeLabel: '+2.15%',
-    isPositive: true,
   },
   {
     symbol: 'USDC',
     name: 'USD Coin',
     quantity: 1250,
     amountLabel: formatAmountLabel('USDC', 1250, 2),
-    valueLabel: 'CHF 1,122.00',
-    changeLabel: '+0.01%',
-    isPositive: true,
   },
   {
     symbol: 'USDT',
     name: 'Tether',
     quantity: 950,
     amountLabel: formatAmountLabel('USDT', 950, 2),
-    valueLabel: 'CHF 847.50',
-    changeLabel: '-0.02%',
-    isPositive: false,
   },
 ];
