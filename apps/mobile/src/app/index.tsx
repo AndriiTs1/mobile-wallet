@@ -1,98 +1,205 @@
-import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Link } from 'expo-router';
+import { SymbolView, type SFSymbol } from 'expo-symbols';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { AssetRow } from '@/components/asset-row';
+import { PortfolioSparkline } from '@/components/portfolio-sparkline';
+import { ScreenHeader } from '@/components/screen-header';
+import { ScreenScaffold } from '@/components/screen-scaffold';
+import { Colors, Spacing } from '@/constants/theme';
+import { mockAssets, mockChartValues } from '@/constants/mock-portfolio';
+import { useMarketPrices } from '@/hooks/use-market-prices';
+import {
+  VALUE_PLACEHOLDER,
+  computeAssetChange24hPercent,
+  computeAssetValueChf,
+  computePortfolioChange24hPercent,
+  computeTotalValueChf,
+  formatChangePercent,
+  formatChf,
+} from '@/utils/portfolio-valuation';
 
-function getDevMenuHint() {
-  if (Platform.OS === 'web') {
-    return <ThemedText type="small">use browser devtools</ThemedText>;
-  }
-  if (Device.isDevice) {
-    return (
-      <ThemedText type="small">
-        shake device or press <ThemedText type="code">m</ThemedText> in terminal
-      </ThemedText>
-    );
-  }
-  const shortcut = Platform.OS === 'android' ? 'cmd+m (or ctrl+m)' : 'cmd+d';
-  return (
-    <ThemedText type="small">
-      press <ThemedText type="code">{shortcut}</ThemedText>
-    </ThemedText>
-  );
-}
+const palette = Colors.dark;
+
+const QUICK_ACTIONS: { label: string; symbol: SFSymbol; glyph: string }[] = [
+  { label: 'Send', symbol: 'arrow.up', glyph: '↑' },
+  { label: 'Receive', symbol: 'arrow.down', glyph: '↓' },
+  { label: 'Swap', symbol: 'arrow.left.arrow.right', glyph: '⇄' },
+  { label: 'Buy', symbol: 'plus', glyph: '+' },
+];
 
 export default function HomeScreen() {
+  const { prices } = useMarketPrices();
+
+  const totalValueChf = computeTotalValueChf(mockAssets, prices);
+  const portfolioChangePercent = computePortfolioChange24hPercent(mockAssets, prices);
+  const isPortfolioPositive = portfolioChangePercent !== null ? portfolioChangePercent >= 0 : null;
+  const changeColor =
+    isPortfolioPositive === null
+      ? palette.textSecondary
+      : isPortfolioPositive
+        ? palette.positive
+        : palette.negative;
+
   return (
-    <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        <ThemedView style={styles.heroSection}>
-          <AnimatedIcon />
-          <ThemedText type="title" style={styles.title}>
-            Welcome to&nbsp;Expo
-          </ThemedText>
-        </ThemedView>
+    <ScreenScaffold>
+      <ScreenHeader />
 
-        <ThemedText type="code" style={styles.code}>
-          get started
-        </ThemedText>
+      <View style={styles.portfolioSection}>
+        <Text style={styles.balanceLabel}>Total Balance</Text>
+        <Text style={styles.balanceValue}>
+          {totalValueChf !== null ? formatChf(totalValueChf) : VALUE_PLACEHOLDER}
+        </Text>
+        <View style={styles.changeRow}>
+          <Text style={[styles.changeValue, { color: changeColor }]}>
+            {portfolioChangePercent !== null
+              ? formatChangePercent(portfolioChangePercent)
+              : VALUE_PLACEHOLDER}
+          </Text>
+          <Text style={styles.changeWindow}>(24h)</Text>
+        </View>
 
-        <ThemedView type="backgroundElement" style={styles.stepContainer}>
-          <HintRow
-            title="Try editing"
-            hint={<ThemedText type="code">src/app/index.tsx</ThemedText>}
-          />
-          <HintRow title="Dev tools" hint={getDevMenuHint()} />
-          <HintRow
-            title="Fresh start"
-            hint={<ThemedText type="code">npm run reset-project</ThemedText>}
-          />
-        </ThemedView>
+        <View style={styles.chartWrap}>
+          <PortfolioSparkline values={mockChartValues} height={48} />
+        </View>
+      </View>
 
-        {Platform.OS === 'web' && <WebBadge />}
-      </SafeAreaView>
-    </ThemedView>
+      <View style={styles.actionsRow}>
+        {QUICK_ACTIONS.map((action) => (
+          <View key={action.label} style={styles.actionItem}>
+            <Pressable
+              style={({ pressed }) => [styles.actionCircle, pressed && styles.actionCirclePressed]}>
+              <SymbolView
+                name={{ ios: action.symbol }}
+                size={18}
+                tintColor={palette.text}
+                fallback={<Text style={styles.actionGlyphFallback}>{action.glyph}</Text>}
+              />
+            </Pressable>
+            <Text style={styles.actionLabel}>{action.label}</Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.assetsSection}>
+        <View style={styles.assetsHeader}>
+          <Text style={styles.assetsHeading}>Assets</Text>
+          <Link href="/assets" asChild>
+            <Pressable hitSlop={8}>
+              <Text style={styles.seeAll}>See all</Text>
+            </Pressable>
+          </Link>
+        </View>
+
+        <View style={styles.assetsList}>
+          {mockAssets.map((asset) => {
+            const valueChf = computeAssetValueChf(asset, prices);
+            const change24hPercent = computeAssetChange24hPercent(asset, prices);
+
+            return (
+              <AssetRow
+                key={asset.symbol}
+                symbol={asset.symbol}
+                name={asset.name}
+                amountLabel={asset.amountLabel}
+                valueLabel={valueChf !== null ? formatChf(valueChf) : VALUE_PLACEHOLDER}
+                changeLabel={
+                  change24hPercent !== null ? formatChangePercent(change24hPercent) : VALUE_PLACEHOLDER
+                }
+                isPositive={change24hPercent !== null ? change24hPercent >= 0 : null}
+              />
+            );
+          })}
+        </View>
+      </View>
+    </ScreenScaffold>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
+  portfolioSection: {
+    marginTop: Spacing.four,
+  },
+  balanceLabel: {
+    color: palette.textSecondary,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  balanceValue: {
+    color: palette.text,
+    fontSize: 42,
+    fontWeight: '700',
+    letterSpacing: -0.8,
+    marginTop: 2,
+  },
+  changeRow: {
     flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: Spacing.one,
+    marginTop: 4,
   },
-  safeArea: {
-    flex: 1,
-    paddingHorizontal: Spacing.four,
+  changeValue: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  changeWindow: {
+    color: palette.textSecondary,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  chartWrap: {
+    marginTop: Spacing.three + 2,
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: Spacing.four,
+  },
+  actionItem: {
     alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.three,
-    maxWidth: MaxContentWidth,
+    gap: Spacing.one + 2,
   },
-  heroSection: {
+  actionCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: palette.backgroundElement,
     alignItems: 'center',
     justifyContent: 'center',
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    gap: Spacing.four,
   },
-  title: {
-    textAlign: 'center',
+  actionCirclePressed: {
+    opacity: 0.6,
   },
-  code: {
-    textTransform: 'uppercase',
+  actionGlyphFallback: {
+    color: palette.text,
+    fontSize: 18,
+    fontWeight: '600',
   },
-  stepContainer: {
-    gap: Spacing.three,
-    alignSelf: 'stretch',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.four,
-    borderRadius: Spacing.four,
+  actionLabel: {
+    color: palette.textSecondary,
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  assetsSection: {
+    marginTop: Spacing.four,
+  },
+  assetsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.two + 2,
+  },
+  assetsHeading: {
+    color: palette.text,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  seeAll: {
+    color: palette.textSecondary,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  assetsList: {
+    gap: Spacing.one + 2,
   },
 });
