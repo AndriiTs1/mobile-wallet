@@ -1,11 +1,11 @@
-# SwissWallet — Root Claude Code Constitution
+# Mobile Wallet — Root Claude Code Constitution
 
 High-priority steering document for this repository. Read before making any change.
 More specific `CLAUDE.md` files in subdirectories may add constraints; they must never weaken the rules below. Read the nearest relevant `CLAUDE.md` before modifying an area.
 
 ## Project identity
 
-- Project: SwissWallet — a non-custodial cryptocurrency wallet.
+- Project: Mobile Wallet — a non-custodial cryptocurrency wallet.
 - pnpm monorepo (`pnpm-workspace.yaml`: `apps/*`, `packages/*`).
 - Current application: `apps/mobile` (React Native / Expo / TypeScript, Expo Router).
 - `packages/` exists but is currently empty — no shared packages yet.
@@ -14,7 +14,7 @@ More specific `CLAUDE.md` files in subdirectories may add constraints; they must
 
 ## Non-custodial security invariant
 
-- Seed phrases, private keys, signing secrets, and equivalent wallet secrets must never be transmitted to a SwissWallet backend.
+- Seed phrases, private keys, signing secrets, and equivalent wallet secrets must never be transmitted to a Mobile Wallet backend.
 - They must never be logged, committed, or placed in analytics, crash reports, test snapshots, fixtures, screenshots, or debugging output.
 - Transaction signing must remain device-side unless an explicitly reviewed architecture decision changes this.
 - Never use `AsyncStorage` or other unprotected general-purpose persistence for key material.

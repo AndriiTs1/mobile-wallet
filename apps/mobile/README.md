@@ -1,10 +1,10 @@
-# SwissWallet 🇨🇭
+# Mobile Wallet 🇨🇭
 
-SwissWallet is a modern non-custodial crypto wallet built with React Native and Expo.
+Mobile Wallet is a modern non-custodial crypto wallet built with React Native and Expo.
 
 The project is focused on security, simplicity, and a premium Swiss FinTech user experience.
 
-> SwissWallet is currently under active development.
+> Mobile Wallet is currently under active development.
 
 ## Tech Stack
 
@@ -18,7 +18,7 @@ The project is focused on security, simplicity, and a premium Swiss FinTech user
 ## Project Structure
 
 ```text
-swisswallet/
+mobile-wallet/
 ├── apps/
 │   └── mobile/          # React Native / Expo application
 │
@@ -74,7 +74,7 @@ The project currently targets iOS first, with Android support planned as part of
 
 ## V1 Scope
 
-SwissWallet V1 will focus on the core non-custodial wallet experience:
+Mobile Wallet V1 will focus on the core non-custodial wallet experience:
 
 - Create wallet
 - Import existing wallet
@@ -87,7 +87,7 @@ SwissWallet V1 will focus on the core non-custodial wallet experience:
 - Transaction history
 - Wallet backup and security settings
 
-Private keys and recovery secrets must never be transmitted to the SwissWallet backend.
+Private keys and recovery secrets must never be transmitted to the Mobile Wallet backend.
 
 Transaction signing is performed locally on the user's device.
 
@@ -101,7 +101,7 @@ Mobile App
     │     ├── Address generation
     │     └── Transaction signing
     │
-    └── SwissWallet API
+    └── Mobile Wallet API
           ├── Market data
           ├── Blockchain data
           └── External providers
@@ -115,7 +115,7 @@ packages/
 
 ## Security
 
-Security is a core requirement of SwissWallet.
+Security is a core requirement of Mobile Wallet.
 
 The project follows several fundamental principles:
 
@@ -129,7 +129,7 @@ The project follows several fundamental principles:
 
 ## Status
 
-🚧 **SwissWallet V1 — Foundation / Active Development**
+🚧 **Mobile Wallet V1 — Foundation / Active Development**
 
 Current development environment:
 
