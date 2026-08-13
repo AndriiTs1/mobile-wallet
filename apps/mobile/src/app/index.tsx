@@ -42,9 +42,7 @@ export default function HomeScreen() {
         : palette.negative;
 
   return (
-    <ScreenScaffold>
-      <ScreenHeader />
-
+    <ScreenScaffold header={<ScreenHeader />}>
       <View style={styles.portfolioSection}>
         <Text style={styles.balanceLabel}>Total Balance</Text>
         <Text style={styles.balanceValue}>

@@ -55,9 +55,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
 
 export default function SettingsScreen() {
   return (
-    <ScreenScaffold>
-      <ScreenHeader title="Settings" />
-
+    <ScreenScaffold header={<ScreenHeader title="Settings" />}>
       <View style={styles.sections}>
         {SETTINGS_SECTIONS.map((section) => (
           <View key={section.title}>

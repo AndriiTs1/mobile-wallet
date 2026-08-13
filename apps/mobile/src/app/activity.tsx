@@ -12,9 +12,7 @@ const GROUP_ORDER: TransactionGroup[] = ['Today', 'Yesterday', 'Earlier'];
 
 export default function ActivityScreen() {
   return (
-    <ScreenScaffold>
-      <ScreenHeader title="Activity" />
-
+    <ScreenScaffold header={<ScreenHeader title="Activity" />}>
       <View style={styles.list}>
         {GROUP_ORDER.map((group) => {
           const transactions = mockTransactions.filter((transaction) => transaction.group === group);

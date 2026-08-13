@@ -7,12 +7,16 @@ import { BottomTabInset, Colors, MaxContentWidth, Spacing } from '@/constants/th
 const palette = Colors.dark;
 
 type ScreenScaffoldProps = {
+  header?: ReactNode;
   children: ReactNode;
   contentStyle?: ViewStyle;
 };
 
-export function ScreenScaffold({ children, contentStyle }: ScreenScaffoldProps) {
+export function ScreenScaffold({ header, children, contentStyle }: ScreenScaffoldProps) {
   const safeAreaInsets = useSafeAreaInsets();
+  // `header`, when provided, renders as a fixed sibling above the ScrollView instead
+  // of as scrollable content — so its position stays identical across every screen
+  // regardless of how much content that screen has, and it never scrolls away.
   // Rebuilding this object on every render (e.g. when a screen re-renders from
   // async state, unrelated to the device's safe area) makes the ScrollView's
   // native `contentInset` prop look "changed" every time, which can leave the
@@ -21,32 +25,45 @@ export function ScreenScaffold({ children, contentStyle }: ScreenScaffoldProps) 
   const insets = useMemo(
     () => ({
       ...safeAreaInsets,
+      top: header ? 0 : safeAreaInsets.top,
       bottom: safeAreaInsets.bottom + BottomTabInset + Spacing.three,
     }),
-    [safeAreaInsets.top, safeAreaInsets.right, safeAreaInsets.bottom, safeAreaInsets.left],
+    [header, safeAreaInsets.top, safeAreaInsets.right, safeAreaInsets.bottom, safeAreaInsets.left],
   );
+
+  const headerPlatformStyle = Platform.select({
+    web: { paddingTop: Spacing.five },
+    default: { paddingTop: safeAreaInsets.top },
+  });
 
   const contentPlatformStyle = Platform.select({
     android: {
-      paddingTop: insets.top,
+      paddingTop: header ? undefined : insets.top,
       paddingLeft: insets.left,
       paddingRight: insets.right,
       paddingBottom: insets.bottom,
     },
     web: {
-      paddingTop: Spacing.five,
+      paddingTop: header ? undefined : Spacing.five,
       paddingBottom: Spacing.four,
     },
   });
 
   return (
-    <ScrollView
-      style={styles.screen}
-      contentInset={insets}
-      contentContainerStyle={[styles.contentContainer, contentPlatformStyle]}
-      showsVerticalScrollIndicator={false}>
-      <View style={[styles.container, contentStyle]}>{children}</View>
-    </ScrollView>
+    <View style={styles.screen}>
+      {header ? (
+        <View style={[styles.headerRow, headerPlatformStyle]}>
+          <View style={styles.headerContainer}>{header}</View>
+        </View>
+      ) : null}
+      <ScrollView
+        style={styles.scroll}
+        contentInset={insets}
+        contentContainerStyle={[styles.contentContainer, contentPlatformStyle]}
+        showsVerticalScrollIndicator={false}>
+        <View style={[styles.container, contentStyle]}>{children}</View>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -54,6 +71,18 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: palette.background,
+  },
+  scroll: {
+    flex: 1,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.four,
+  },
+  headerContainer: {
+    maxWidth: MaxContentWidth,
+    width: '100%',
   },
   contentContainer: {
     flexDirection: 'row',

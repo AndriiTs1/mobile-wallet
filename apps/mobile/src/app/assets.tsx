@@ -37,9 +37,7 @@ export default function AssetsScreen() {
   }
 
   return (
-    <ScreenScaffold>
-      <ScreenHeader title="Assets" />
-
+    <ScreenScaffold header={<ScreenHeader title="Assets" />}>
       <View style={styles.summary}>
         <Text style={styles.summaryLabel}>Total Value</Text>
         <Text style={styles.summaryValue}>
