@@ -8,7 +8,7 @@ export default function AppTabs() {
   return (
     <NativeTabs
       backgroundColor={palette.background}
-      indicatorColor="rgba(201, 162, 75, 0.14)"
+      indicatorColor="rgba(201, 162, 75, 0.16)"
       blurEffect="none"
       shadowColor={palette.border}
       disableTransparentOnScrollEdge
@@ -21,6 +21,7 @@ export default function AppTabs() {
       <NativeTabs.Trigger name="index">
         <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
+          sf={{ default: 'house', selected: 'house.fill' }}
           src={require('@/assets/images/tabIcons/home.png')}
           renderingMode="template"
         />
@@ -29,6 +30,7 @@ export default function AppTabs() {
       <NativeTabs.Trigger name="assets">
         <NativeTabs.Trigger.Label>Assets</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
+          sf={{ default: 'chart.pie', selected: 'chart.pie.fill' }}
           src={require('@/assets/images/tabIcons/assets.png')}
           renderingMode="template"
         />
@@ -37,6 +39,7 @@ export default function AppTabs() {
       <NativeTabs.Trigger name="activity">
         <NativeTabs.Trigger.Label>Activity</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
+          sf={{ default: 'clock', selected: 'clock.fill' }}
           src={require('@/assets/images/tabIcons/activity.png')}
           renderingMode="template"
         />
@@ -45,6 +48,7 @@ export default function AppTabs() {
       <NativeTabs.Trigger name="settings">
         <NativeTabs.Trigger.Label>Settings</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
+          sf={{ default: 'gearshape', selected: 'gearshape.fill' }}
           src={require('@/assets/images/tabIcons/settings.png')}
           renderingMode="template"
         />
