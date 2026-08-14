@@ -65,5 +65,12 @@ export const Spacing = {
   six: 64,
 } as const;
 
-export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
+// Purely technical clearance: just enough, on top of `safeAreaInsets.bottom`
+// (the home indicator margin), to bring scroll content flush with the top
+// edge of the floating pill tab bar — no visual/aesthetic spacing folded in
+// here (see `bottomSpacer` in ScreenScaffold for that). Applied as real
+// layout padding, not as `contentInset` — measured empirically: NativeTabs'
+// automatic content-inset adjustment does not reliably keep scrolled content
+// clear of the floating bar on its own.
+export const BottomTabInset = Platform.select({ ios: 24, android: 80 }) ?? 0;
 export const MaxContentWidth = 800;

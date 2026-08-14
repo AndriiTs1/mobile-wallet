@@ -26,7 +26,10 @@ export function ScreenScaffold({ header, children, contentStyle }: ScreenScaffol
     () => ({
       ...safeAreaInsets,
       top: header ? 0 : safeAreaInsets.top,
-      bottom: safeAreaInsets.bottom + BottomTabInset + Spacing.three,
+      // Technical tab-bar clearance only (safe-area + the floating tab bar's own
+      // footprint) — no visual/aesthetic spacing folded in here. See `bottomSpacer`
+      // below for the deliberate, separate breathing-room value.
+      bottom: safeAreaInsets.bottom + BottomTabInset,
     }),
     [header, safeAreaInsets.top, safeAreaInsets.right, safeAreaInsets.bottom, safeAreaInsets.left],
   );
@@ -37,6 +40,14 @@ export function ScreenScaffold({ header, children, contentStyle }: ScreenScaffol
   });
 
   const contentPlatformStyle = Platform.select({
+    // iOS: reserve the clearance as real layout padding, not `contentInset` —
+    // `contentInset` only shifts the native UIScrollView's own inset accounting,
+    // which this floating-tab-bar/clipped-viewport setup does not reliably honor
+    // at rest (verified: content can scroll fully behind the tab bar with
+    // `contentInset` alone). Padding is a guaranteed, ordinary layout value.
+    ios: {
+      paddingBottom: insets.bottom,
+    },
     android: {
       paddingTop: header ? undefined : insets.top,
       paddingLeft: insets.left,
@@ -56,13 +67,34 @@ export function ScreenScaffold({ header, children, contentStyle }: ScreenScaffol
           <View style={styles.headerContainer}>{header}</View>
         </View>
       ) : null}
-      <ScrollView
-        style={styles.scroll}
-        contentInset={insets}
-        contentContainerStyle={[styles.contentContainer, contentPlatformStyle]}
-        showsVerticalScrollIndicator={false}>
-        <View style={[styles.container, contentStyle]}>{children}</View>
-      </ScrollView>
+      {/* The clipped scroll viewport: a hard visual boundary between the fixed
+          header above and whatever the ScrollView does internally (content
+          offset, contentInset, iOS bounce/rubber-band, or any inset a native
+          tab host applies on its own). `overflow: 'hidden'` here means no
+          scrolled content can ever be painted outside this box, regardless of
+          scroll position — this is what actually keeps content off the header
+          during an aggressive upward bounce; contentInset alone only shifts
+          where content starts, it does not clip. */}
+      <View style={styles.viewport}>
+        <ScrollView
+          style={styles.scroll}
+          contentInset={{ ...insets, bottom: 0 }}
+          contentContainerStyle={[styles.contentContainer, contentPlatformStyle]}
+          showsVerticalScrollIndicator={false}>
+          <View style={[styles.container, contentStyle]}>
+            {children}
+            {/* Deliberate visual breathing room after the last piece of content —
+                distinct from `insets.bottom`/`BottomTabInset` above, which only
+                reserves clearance to keep content clear of the floating tab bar.
+                This is the purely aesthetic gap between the footer/last row and
+                the tab bar's top edge, on top of that technical clearance —
+                sized to `Spacing.five` to feel like the mirror image of the
+                approved top breathing room (screens use the same value for
+                their first section's `marginTop` below the header). */}
+            <View style={styles.bottomSpacer} />
+          </View>
+        </ScrollView>
+      </View>
     </View>
   );
 }
@@ -72,6 +104,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: palette.background,
   },
+  viewport: {
+    flex: 1,
+    overflow: 'hidden',
+  },
   scroll: {
     flex: 1,
   },
@@ -79,6 +115,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     paddingHorizontal: Spacing.four,
+    // Explicit opaque background (not just inherited from `screen`) so the
+    // header region is never see-through, independent of paint order.
+    backgroundColor: palette.background,
   },
   headerContainer: {
     maxWidth: MaxContentWidth,
@@ -93,5 +132,8 @@ const styles = StyleSheet.create({
     maxWidth: MaxContentWidth,
     flexGrow: 1,
     width: '100%',
+  },
+  bottomSpacer: {
+    height: Spacing.five,
   },
 });
