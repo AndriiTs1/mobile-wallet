@@ -1,4 +1,3 @@
-import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
 import { NativeTabs } from 'expo-router/unstable-native-tabs';
 import { useEffect } from 'react';
@@ -10,29 +9,18 @@ const palette = Colors.dark;
 export default function AppTabs() {
   const router = useRouter();
   // The native tab controller can restore whatever tab was last active
-  // before the process was killed, even on a plain icon launch with no
-  // deep link. This effect runs once per process lifetime — AppTabs mounts
-  // exactly once at app start and is never remounted by backgrounding/
-  // foregrounding — so it only ever has a chance to act on a genuine cold
-  // launch, never on background → foreground.
+  // before the process was killed, even on a plain icon launch. NativeTabs
+  // exposes no prop to set its initial/default selected tab (checked:
+  // `NativeTabsProps` only has visual/styling options), so this is forced
+  // unconditionally at the root. This effect runs once per process
+  // lifetime — AppTabs mounts exactly once at app start and is never
+  // remounted by backgrounding/foregrounding — so it only ever fires on a
+  // genuine cold launch, never on background → foreground.
   //
-  // `Linking.getInitialURL()` (React Native's OS-level launch URL, wrapped
-  // by expo-linking) is the actual signal for "was this process cold-started
-  // by an external deep link": it resolves to that URL only when one started
-  // the launch, and to `null` for an ordinary icon tap. Expo Router's own
-  // linking integration already navigates to that URL's route when present,
-  // so we only need to force Home when there was no such URL — an
-  // intentional deep link is left untouched.
+  // Deep-link preservation on cold launch is deliberately not handled here —
+  // deferred until real deep-link flows exist.
   useEffect(() => {
-    let cancelled = false;
-    Linking.getInitialURL().then((url) => {
-      if (!cancelled && !url) {
-        router.replace('/');
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
+    router.replace('/');
   }, [router]);
 
   return (
