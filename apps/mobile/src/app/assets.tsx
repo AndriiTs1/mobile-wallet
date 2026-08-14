@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import { AssetRow } from '@/components/asset-row';
+import { EthereumBalanceProof } from '@/components/dev/ethereum-balance-proof';
 import { ScreenHeader } from '@/components/screen-header';
 import { ScreenScaffold } from '@/components/screen-scaffold';
 import { Colors, Spacing } from '@/constants/theme';
@@ -67,6 +68,8 @@ export default function AssetsScreen() {
       </View>
 
       <Text style={styles.footnote}>Asset quantities are demo data — {statusText}</Text>
+
+      {__DEV__ ? <EthereumBalanceProof /> : null}
     </ScreenScaffold>
   );
 }
