@@ -5,24 +5,43 @@ import {
   type EthereumAddress,
 } from 'chain-domain';
 
+import { attemptProvidersInOrder, fetchWithTimeout, type ProviderAttempt } from './provider-failover';
+
+export type EthereumRpcProvider = {
+  readonly id: string;
+  readonly rpcUrl: string;
+};
+
 /**
- * Public, keyless Ethereum mainnet JSON-RPC endpoint (PublicNode). Chosen
- * for this Stage 4C.2 read-only proof specifically because it requires no
- * API key/signup — per Stage 4C research, an embedded provider identifier
- * is a real open decision requiring product/security sign-off before real
- * usage; this default is provisional-for-proof only, not an ADR-006
- * provider selection. Cloudflare's public gateway (cloudflare-eth.com) was
- * tried first and is currently returning internal errors on live requests;
- * PublicNode was verified working via a live call during this stage.
+ * Two independent, public, keyless Ethereum mainnet JSON-RPC endpoints.
+ * Both verified live during Stage 4C.4 (`eth_getBalance` against the same
+ * test address returned matching results from both). Provisional-for-proof
+ * only, not an ADR-006 provider selection.
+ *
+ * Providers tried and rejected during Stage 4C research/4C.4: Cloudflare's
+ * public gateway (cloudflare-eth.com) — consistently returns "Internal
+ * error" on live requests; Ankr's public endpoint (rpc.ankr.com/eth) — now
+ * requires an API key, no longer keyless; llamarpc (eth.llamarpc.com) —
+ * returned HTTP 521 (origin down); 1rpc.io — initially returned a valid
+ * result, but repeat verification showed it genuinely flaky (429 rate
+ * limit revealing it's proxied through OnFinality, an inconsistent 301,
+ * and a 503 across successive live calls within the same testing session)
+ * — rejected as an unreliable fallback despite being keyless. meowrpc.com
+ * also rate-limited (429) after a single successful call. `eth.drpc.org`
+ * was the only candidate that returned a consistent 200 with a matching
+ * result across repeated live calls.
  */
-const DEFAULT_ETHEREUM_MAINNET_RPC_URL = 'https://ethereum-rpc.publicnode.com';
+const ETHEREUM_PROVIDERS: readonly EthereumRpcProvider[] = [
+  { id: 'publicnode', rpcUrl: 'https://ethereum-rpc.publicnode.com' },
+  { id: 'drpc', rpcUrl: 'https://eth.drpc.org' },
+];
 
 const HEX_QUANTITY_PATTERN = /^0x[0-9a-fA-F]+$/;
 
 async function callEthGetBalance(rpcUrl: string, address: EthereumAddress): Promise<string> {
   let response: Response;
   try {
-    response = await fetch(rpcUrl, {
+    response = await fetchWithTimeout(rpcUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -78,20 +97,41 @@ function hexWeiToAtomicAmount(hexWei: string): AtomicAmount {
   return toAtomicAmount(wei.toString(10));
 }
 
+export type EthereumBalanceProofResult = {
+  readonly snapshot: BalanceSnapshot;
+  /** Which provider actually served this result — infrastructure/
+   * diagnostic metadata. Deliberately NOT part of chain-domain's
+   * `BalanceSnapshot`: provider identity is not blockchain domain data. */
+  readonly providerId: string;
+};
+
 /**
  * Fetches the native ETH balance for a public Ethereum mainnet address via
  * direct-device JSON-RPC (Stage 4C: direct-device access for core wallet
  * reads). Read-only — no key material is involved, and none is required:
  * `eth_getBalance` accepts any address as a public query parameter.
+ *
+ * Tries `providers` in order, stopping at the first success (Stage 4C.4:
+ * sequential-only, never parallel, to avoid exposing the address to more
+ * providers than necessary). Both providers go through this exact same
+ * request/parsing/validation logic — nothing is duplicated per provider.
  */
 export async function fetchEthMainnetBalance(
   address: EthereumAddress,
-  rpcUrl: string = DEFAULT_ETHEREUM_MAINNET_RPC_URL,
-): Promise<BalanceSnapshot> {
-  const hexWei = await callEthGetBalance(rpcUrl, address);
-  return {
-    assetId: { kind: 'native', chainId: 'ethereum:mainnet' },
-    amount: hexWeiToAtomicAmount(hexWei),
-    asOf: Date.now(),
-  };
+  providers: readonly EthereumRpcProvider[] = ETHEREUM_PROVIDERS,
+): Promise<EthereumBalanceProofResult> {
+  const attempts: ProviderAttempt<BalanceSnapshot>[] = providers.map((provider) => ({
+    id: provider.id,
+    run: async () => {
+      const hexWei = await callEthGetBalance(provider.rpcUrl, address);
+      return {
+        assetId: { kind: 'native', chainId: 'ethereum:mainnet' },
+        amount: hexWeiToAtomicAmount(hexWei),
+        asOf: Date.now(),
+      };
+    },
+  }));
+
+  const { result, providerId } = await attemptProvidersInOrder(attempts);
+  return { snapshot: result, providerId };
 }

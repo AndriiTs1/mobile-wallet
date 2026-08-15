@@ -57,6 +57,9 @@ export function BitcoinAddressProof() {
       {proof ? (
         <>
           <Text style={styles.row}>
+            Provider: <Text style={styles.mono}>{proof.providerId}</Text>
+          </Text>
+          <Text style={styles.row}>
             Confirmed sats: <Text style={styles.mono}>{proof.confirmedBalance.amount}</Text>
           </Text>
           <Text style={styles.row}>

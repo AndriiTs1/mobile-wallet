@@ -1,14 +1,27 @@
 import { toAtomicAmount, type AtomicAmount, type BalanceSnapshot, type BitcoinUtxo } from 'chain-domain';
 
+import { attemptProvidersInOrder, fetchWithTimeout, type ProviderAttempt } from './provider-failover';
+
+export type BitcoinIndexerProvider = {
+  readonly id: string;
+  readonly apiBase: string;
+};
+
 /**
- * Public, keyless Esplora-style Bitcoin mainnet indexer (mempool.space).
- * Chosen per Stage 4C research: raw Bitcoin Core RPC alone cannot
- * efficiently answer "what UTXOs/history does address X have" without the
- * caller running its own indexed wallet import — an Esplora-style REST API
- * is the right category for this proof. Provisional-for-proof only, not an
- * ADR-006 provider selection.
+ * Two independent, public, keyless Esplora-style Bitcoin mainnet indexers.
+ * Both verified live during Stage 4C.3/4C.4 — Blockstream's response for
+ * the Stage 4C.3 demo address matched mempool.space's `chain_stats`
+ * exactly (funded_txo_sum and spent_txo_sum identical), cross-validating
+ * both instances. Chosen per Stage 4C research: raw Bitcoin Core RPC alone
+ * cannot efficiently answer "what UTXOs/history does address X have"
+ * without the caller running its own indexed wallet import — an
+ * Esplora-style REST API is the right category for this proof.
+ * Provisional-for-proof only, not an ADR-006 provider selection.
  */
-const DEFAULT_BITCOIN_MAINNET_API_BASE = 'https://mempool.space/api';
+const BITCOIN_PROVIDERS: readonly BitcoinIndexerProvider[] = [
+  { id: 'mempool.space', apiBase: 'https://mempool.space/api' },
+  { id: 'blockstream.info', apiBase: 'https://blockstream.info/api' },
+];
 
 /**
  * Bitcoin's fixed protocol-level supply cap: 21,000,000 BTC = 2.1e15
@@ -36,8 +49,8 @@ const SATOSHI_SUPPLY_CAP_BIGINT = BigInt(SATOSHI_SUPPLY_CAP);
  * untrustworthy, not silently accepted. If a future provider response
  * genuinely requires values beyond this range, that requires introducing
  * a lossless wire representation (e.g. numbers-as-strings, a custom JSON
- * parser) — not weakening this check. Not needed for Stage 4C.3: the live
- * provider response does not exceed this range (verified below).
+ * parser) — not weakening this check. Not needed for Stage 4C.3/4C.4: the
+ * live provider responses do not exceed this range (verified below).
  */
 function assertSafeNonNegativeInteger(value: unknown, fieldName: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
@@ -76,7 +89,7 @@ function assertBitcoinMainnetAddress(address: string): void {
 async function fetchJson(url: string): Promise<unknown> {
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetchWithTimeout(url, {});
   } catch (error) {
     throw new Error(`Failed to reach Bitcoin indexer: ${(error as Error).message}`);
   }
@@ -199,8 +212,29 @@ async function fetchBitcoinAddressUtxos(address: string, apiBase: string): Promi
   });
 }
 
+/**
+ * Fetches both required pieces (address stats + UTXOs) from ONE provider.
+ * This is the atomic failover unit: `Promise.all` means if either request
+ * or its validation fails, the WHOLE attempt for this provider rejects —
+ * `attemptProvidersInOrder` then moves to the next provider fresh, never
+ * combining stats from one provider with UTXOs from another.
+ */
+async function fetchFromOneBitcoinProvider(
+  address: string,
+  apiBase: string,
+): Promise<{ stats: BitcoinAddressStatsResult; utxos: BitcoinUtxo[] }> {
+  const [stats, utxos] = await Promise.all([
+    fetchBitcoinAddressStats(address, apiBase),
+    fetchBitcoinAddressUtxos(address, apiBase),
+  ]);
+  return { stats, utxos };
+}
+
 export type BitcoinAddressProof = {
   readonly address: string;
+  /** Which provider actually served this result — infrastructure/
+   * diagnostic metadata, not chain-domain data. */
+  readonly providerId: string;
   readonly confirmedBalance: BalanceSnapshot;
   readonly unconfirmedDeltaSats: bigint;
   readonly utxos: readonly BitcoinUtxo[];
@@ -214,6 +248,11 @@ export type BitcoinAddressProof = {
  * reads). Read-only — no key material is involved or required; an address
  * is public query input.
  *
+ * Tries `providers` in order, stopping at the first fully-successful
+ * attempt (Stage 4C.4: sequential-only, never parallel). Stats and UTXOs
+ * always come from the same provider attempt — see
+ * `fetchFromOneBitcoinProvider`.
+ *
  * This is an ADDRESS-level proof only, not a wallet balance: it reflects
  * exactly what this one queried address currently shows via the indexer,
  * not any notion of a complete wallet across multiple addresses/branches
@@ -222,14 +261,18 @@ export type BitcoinAddressProof = {
  */
 export async function fetchBitcoinMainnetAddressProof(
   address: string,
-  apiBase: string = DEFAULT_BITCOIN_MAINNET_API_BASE,
+  providers: readonly BitcoinIndexerProvider[] = BITCOIN_PROVIDERS,
 ): Promise<BitcoinAddressProof> {
   assertBitcoinMainnetAddress(address);
 
-  const [stats, utxos] = await Promise.all([
-    fetchBitcoinAddressStats(address, apiBase),
-    fetchBitcoinAddressUtxos(address, apiBase),
-  ]);
+  const attempts: ProviderAttempt<{ stats: BitcoinAddressStatsResult; utxos: BitcoinUtxo[] }>[] =
+    providers.map((provider) => ({
+      id: provider.id,
+      run: () => fetchFromOneBitcoinProvider(address, provider.apiBase),
+    }));
+
+  const { result, providerId } = await attemptProvidersInOrder(attempts);
+  const { stats, utxos } = result;
 
   const utxoTotal = utxos.reduce((sum, utxo) => sum + BigInt(utxo.value), 0n);
   // Sum of current UTXOs is current state, so the supply-cap sanity check
@@ -241,6 +284,7 @@ export async function fetchBitcoinMainnetAddressProof(
 
   return {
     address,
+    providerId,
     confirmedBalance: stats.confirmedBalance,
     unconfirmedDeltaSats: stats.unconfirmedDeltaSats,
     utxos,

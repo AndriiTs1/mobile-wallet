@@ -5,6 +5,9 @@ import { fetchEthMainnetBalance } from '@/services/ethereum-rpc';
 
 export type EthereumBalanceProofState = {
   snapshot: BalanceSnapshot | null;
+  /** Which provider (primary or fallback) actually served `snapshot` —
+   * DEV-diagnostic infrastructure metadata, not chain-domain data. */
+  providerId: string | null;
   isLoading: boolean;
   error: Error | null;
   refresh: () => Promise<void>;
@@ -21,6 +24,7 @@ export type EthereumBalanceProofState = {
  */
 export function useEthereumBalanceProof(address: EthereumAddress): EthereumBalanceProofState {
   const [snapshot, setSnapshot] = useState<BalanceSnapshot | null>(null);
+  const [providerId, setProviderId] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -28,7 +32,8 @@ export function useEthereumBalanceProof(address: EthereumAddress): EthereumBalan
     setIsLoading(true);
     try {
       const next = await fetchEthMainnetBalance(address);
-      setSnapshot(next);
+      setSnapshot(next.snapshot);
+      setProviderId(next.providerId);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Failed to fetch Ethereum balance'));
@@ -41,5 +46,5 @@ export function useEthereumBalanceProof(address: EthereumAddress): EthereumBalan
     load();
   }, [load]);
 
-  return { snapshot, isLoading, error, refresh: load };
+  return { snapshot, providerId, isLoading, error, refresh: load };
 }

@@ -34,7 +34,7 @@ function formatWeiAsEth(wei: string): string {
 }
 
 export function EthereumBalanceProof() {
-  const { snapshot, isLoading, error, refresh } = useEthereumBalanceProof(DEV_PROOF_ADDRESS);
+  const { snapshot, providerId, isLoading, error, refresh } = useEthereumBalanceProof(DEV_PROOF_ADDRESS);
 
   return (
     <View style={styles.container}>
@@ -49,6 +49,9 @@ export function EthereumBalanceProof() {
       {error ? <Text style={styles.statusError}>Balance unavailable: {error.message}</Text> : null}
       {snapshot ? (
         <>
+          <Text style={styles.row}>
+            Provider: <Text style={styles.mono}>{providerId}</Text>
+          </Text>
           <Text style={styles.row}>
             Wei: <Text style={styles.mono}>{snapshot.amount}</Text>
           </Text>
