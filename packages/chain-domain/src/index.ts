@@ -19,3 +19,5 @@ export type { UnixTimestampMs } from './timestamp';
 export type { BalanceSnapshot } from './balance-snapshot';
 
 export type { FeeQuote, BitcoinFeeQuote, EthereumFeeQuote } from './fee-quote';
+
+export type { BitcoinUtxo } from './bitcoin-utxo';
