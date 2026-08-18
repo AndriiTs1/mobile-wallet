@@ -16,6 +16,60 @@ pub fn health_check() -> String {
     "pong".to_owned()
 }
 
+/// V1 HD derivation-path foundation (ADR-003).
+///
+/// Stage 5B.3 proof only: proves the exact ADR-003 V1 paths can be parsed and
+/// derived from a seed. Not exposed via UniFFI. No signing, address encoding,
+/// secure storage, or arbitrary-path API is introduced here (see ADR-003 §10).
+///
+/// Not yet wired to any public API — exercised only by `tests::v1_derivation_paths`
+/// in this stage; a later stage wires it to a UniFFI-exported surface.
+#[allow(dead_code)]
+mod derivation {
+    use bitcoin::Network;
+    use bitcoin::bip32::{DerivationPath, Xpriv};
+    use bitcoin::secp256k1::Secp256k1;
+    use std::str::FromStr;
+
+    /// The fixed set of V1 derivation paths Wallet Core controls (ADR-003 §2, §4).
+    ///
+    /// Deliberately a closed enum, not a raw path string: callers select one of
+    /// these three policy-defined paths, never an arbitrary derivation string
+    /// (ADR-003 §10.1, §10.2). Account 0 / address_index 0 only, per Stage 5B.3 scope.
+    pub(crate) enum V1DerivationPath {
+        /// ADR-003 §2: `m/44'/60'/0'/0/0`.
+        EthereumV1,
+        /// ADR-003 §4: `m/84'/0'/0'/0/0` (external/receive branch).
+        BitcoinReceiveV1,
+        /// ADR-003 §4: `m/84'/0'/0'/1/0` (internal/change branch).
+        BitcoinChangeV1,
+    }
+
+    impl V1DerivationPath {
+        const fn path_str(&self) -> &'static str {
+            match self {
+                V1DerivationPath::EthereumV1 => "m/44'/60'/0'/0/0",
+                V1DerivationPath::BitcoinReceiveV1 => "m/84'/0'/0'/0/0",
+                V1DerivationPath::BitcoinChangeV1 => "m/84'/0'/0'/1/0",
+            }
+        }
+    }
+
+    /// Derives the extended private key at a fixed V1 path (ADR-003) from a BIP-32 seed.
+    ///
+    /// Internal derivation-proof only: not exposed via UniFFI, does not sign, and
+    /// does not encode or return any chain-specific address.
+    pub(crate) fn derive_v1(seed: &[u8], path: V1DerivationPath) -> Xpriv {
+        let secp = Secp256k1::new();
+        let master = Xpriv::new_master(Network::Bitcoin, seed).expect("valid BIP-32 seed");
+        let derivation_path =
+            DerivationPath::from_str(path.path_str()).expect("valid Wallet Core V1 path constant");
+        master
+            .derive_priv(&secp, &derivation_path)
+            .expect("valid BIP-32 child derivation")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,5 +140,61 @@ mod tests {
         ];
 
         assert_eq!(seed, expected_seed);
+    }
+
+    mod v1_derivation_paths {
+        use super::super::derivation::{V1DerivationPath, derive_v1};
+        use bitcoin::bip32::DerivationPath;
+        use std::str::FromStr;
+
+        /// Fixed, deterministic test-only seed — not a real recovered secret.
+        const REFERENCE_SEED: [u8; 32] = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b,
+            0x1c, 0x1d, 0x1e, 0x1f,
+        ];
+
+        #[test]
+        fn ethereum_v1_path_parses() {
+            DerivationPath::from_str("m/44'/60'/0'/0/0").expect("valid ADR-003 Ethereum V1 path");
+        }
+
+        #[test]
+        fn bitcoin_receive_v1_path_parses() {
+            DerivationPath::from_str("m/84'/0'/0'/0/0")
+                .expect("valid ADR-003 Bitcoin receive V1 path");
+        }
+
+        #[test]
+        fn bitcoin_change_v1_path_parses() {
+            DerivationPath::from_str("m/84'/0'/0'/1/0")
+                .expect("valid ADR-003 Bitcoin change V1 path");
+        }
+
+        #[test]
+        fn v1_paths_derive_deterministically_from_seed() {
+            let ethereum_first = derive_v1(&REFERENCE_SEED, V1DerivationPath::EthereumV1);
+            let ethereum_second = derive_v1(&REFERENCE_SEED, V1DerivationPath::EthereumV1);
+            assert_eq!(ethereum_first.to_string(), ethereum_second.to_string());
+
+            let receive_first = derive_v1(&REFERENCE_SEED, V1DerivationPath::BitcoinReceiveV1);
+            let receive_second = derive_v1(&REFERENCE_SEED, V1DerivationPath::BitcoinReceiveV1);
+            assert_eq!(receive_first.to_string(), receive_second.to_string());
+
+            let change_first = derive_v1(&REFERENCE_SEED, V1DerivationPath::BitcoinChangeV1);
+            let change_second = derive_v1(&REFERENCE_SEED, V1DerivationPath::BitcoinChangeV1);
+            assert_eq!(change_first.to_string(), change_second.to_string());
+        }
+
+        #[test]
+        fn v1_paths_derive_to_distinct_keys() {
+            let ethereum = derive_v1(&REFERENCE_SEED, V1DerivationPath::EthereumV1);
+            let receive = derive_v1(&REFERENCE_SEED, V1DerivationPath::BitcoinReceiveV1);
+            let change = derive_v1(&REFERENCE_SEED, V1DerivationPath::BitcoinChangeV1);
+
+            assert_ne!(ethereum.to_string(), receive.to_string());
+            assert_ne!(ethereum.to_string(), change.to_string());
+            assert_ne!(receive.to_string(), change.to_string());
+        }
     }
 }
