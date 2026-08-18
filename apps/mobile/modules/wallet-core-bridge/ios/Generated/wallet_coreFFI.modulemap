@@ -1,0 +1,7 @@
+module wallet_coreFFI {
+    header "wallet_coreFFI.h"
+    export *
+    use "Darwin"
+    use "_Builtin_stdbool"
+    use "_Builtin_stdint"
+}

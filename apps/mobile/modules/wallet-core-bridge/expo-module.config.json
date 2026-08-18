@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["WalletCoreBridgeModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.walletcorebridge.WalletCoreBridgeModule"]
+  }
+}

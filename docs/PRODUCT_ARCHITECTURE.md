@@ -293,17 +293,23 @@ Each of these is expanded in its own section below (§9–§21). The unifying ru
 
 ---
 
-## 9. Non-Custodial Wallet Architecture _(proposed)_
+## 9. Non-Custodial Wallet Architecture
 
 This is the most safety-critical section of this document.
 
-**Presentation vs. wallet-core boundary:** React Native remains the presentation/orchestration layer only. Sensitive wallet operations (entropy generation, HD derivation, secret-memory handling, signing) must be isolated behind a narrow `WalletCore` interface that the app calls into — the app never manipulates key material directly. `packages/wallet-core` may still be the repository boundary for this interface, but the boundary is architectural, not a statement that the implementation is TypeScript. Before Stage 4 implementation begins, we must explicitly decide (see ADR-002, §27) whether production key generation, HD derivation, secure-memory handling, and signing live in:
+**Presentation vs. Wallet Core boundary:** React Native remains the presentation and orchestration layer only. Security-critical wallet operations are isolated behind a narrow native Wallet Core boundary. React Native must never directly manipulate mnemonic, seed, private-key, or other secret wallet material.
 
-a) audited JS/TS crypto libraries, running in the React Native JS runtime;
-b) platform-native Swift/Kotlin, called from React Native via a native module;
-c) a shared native core (e.g. Rust) exposed to both platforms through a native bridge.
+ADR-002 selected a shared Rust Wallet Core. The native foundation is now implemented with the following boundary:
 
-This choice must be driven by security review, the maturity/audit history of available libraries for each option, curve support for the target chains (§10), and how well each option handles secret material in memory (zeroing, avoiding GC-managed memory for secrets, minimizing time spent unencrypted) — never by developer convenience or time-to-ship.
+React Native / Expo → WalletCoreBridge (Expo Modules API) → Swift → UniFFI → Rust Wallet Core
+
+The Rust core lives in `packages/wallet-core`. The React Native/native boundary lives in `apps/mobile/modules/wallet-core-bridge`. Host-only UniFFI binding-generation tooling lives separately in `tools/uniffi-bindgen`, keeping build-time binding-generation dependencies out of the Wallet Core device runtime dependency surface.
+
+Stage 5A intentionally exposes only the deterministic proof operations `getVersion()` and `healthCheck()`. The complete React Native → Swift → UniFFI → Rust execution path has been successfully built, installed, launched, and runtime-verified on a physical iPhone with `Version: 0.1.0` and `Health: pong`.
+
+Stage 5A does not implement entropy generation, mnemonic handling, HD derivation, private-key handling, secure secret storage, biometric authorization, or transaction signing. Those capabilities remain security-critical future work and must be introduced incrementally under the approved ADRs and dedicated security review.
+
+The native bridge must remain narrow and explicitly allowlisted. Generic command execution, opaque signing payloads, or APIs that expose raw secret material to React Native are not permitted.
 
 **Wallet creation / entropy:**
 
@@ -601,11 +607,16 @@ Stages largely follow the sequence suggested for this task, which was checked ag
 
 **Stage 4 — Wallet-core foundation**
 
-- Goal: introduce an isolated wallet-core module (repository boundary likely `packages/wallet-core`) capable of entropy generation, BIP-39 mnemonic generation, and BIP-32/44 HD derivation — with no UI wiring yet.
-- Scope: new package/module, vetted crypto dependencies (first real dependency-review event for this project), exhaustive test vectors. Implementation language/runtime is decided as part of this stage, not assumed beforehand (§9).
-- Dependencies: Stage 3.
-- Exit criteria: **ADR-002 (wallet-core runtime/language), ADR-003 (derivation paths/account model), and the crypto-library and supported-curves/chains decisions are recorded and approved before implementation work in this stage is considered complete** (§27); deterministic test vectors pass for the chosen implementation; the wallet-core boundary has zero React/UI imports on the sensitive-operations path; security-reviewer sign-off on both the runtime/language choice and the specific dependency choices.
-- Risk: high (foundational crypto correctness).
+- Status: **native Wallet Core boundary completed in Stage 5A; secret-bearing wallet functionality still deferred.**
+- Goal: establish the isolated Wallet Core runtime and native trust boundary before introducing mnemonic, seed, private-key, or signing logic.
+- Implemented foundation: shared Rust core in `packages/wallet-core`; Expo Modules API bridge in `apps/mobile/modules/wallet-core-bridge`; Swift → UniFFI → Rust integration; host-only binding generator in `tools/uniffi-bindgen`; reproducible iOS source-to-native build path for physical-device and Apple Silicon simulator targets; no compiled Wallet Core binaries committed to Git.
+- Verified proof surface: `getVersion()` → `0.1.0`, `healthCheck()` → `pong`.
+- Runtime verification: native iOS build, install, launch, and end-to-end React Native → Swift → UniFFI → Rust proof verified on a physical iPhone.
+- Security status: security review completed with no HIGH/CRITICAL findings for the native bridge foundation.
+- Dependencies: ADR-002 and ADR-003 define the authoritative Wallet Core runtime/trust-boundary and derivation model; ADR-004 and ADR-005 define future recovery/storage requirements.
+- Still deliberately deferred: entropy generation, BIP-39 mnemonic lifecycle, HD derivation, private-key lifecycle, secure secret storage, biometric authorization, signing, and the dedicated crypto-library dependency review/test-vector work required for those operations.
+- Exit criteria for this foundation: narrow allowlisted native API, reproducible native build, Rust/TypeScript validation clean, no committed native binaries, security-reviewer sign-off, and physical-device runtime proof.
+- Risk: high once secret-bearing cryptographic functionality begins; the completed bridge foundation itself contains no wallet secrets or signing logic.
 
 **Stage 5 — Secure wallet creation & storage**
 

@@ -20,3 +20,12 @@ web-build/
 # Native build
 apps/mobile/ios/
 apps/mobile/android/
+
+# Rust build artifacts (packages/wallet-core, tools/uniffi-bindgen)
+packages/wallet-core/target/
+tools/uniffi-bindgen/target/
+
+# wallet-core-bridge iOS Rust static library is a build product of
+# apps/mobile/modules/wallet-core-bridge/ios/build-rust.sh, cross-compiled fresh for
+# whichever platform Xcode is building — never a committed/vendored binary.
+apps/mobile/modules/wallet-core-bridge/ios/Rust/
