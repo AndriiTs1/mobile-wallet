@@ -266,6 +266,108 @@ mod wallet_secret {
                 .to_string(),
         }
     }
+
+    /// Canonical BIP-39 entropy (ADR-005 §2's persisted-secret form), holding
+    /// only the valid-length prefix of the underlying fixed-size buffer.
+    ///
+    /// This exists to close a narrow but real footgun in the raw
+    /// `(Zeroizing<[u8; 33]>, usize)` shape `entropy_from_mnemonic` already
+    /// returns (unchanged, per Stage 5D.4 scope): a caller of that tuple
+    /// could accidentally read the full 33-byte buffer instead of only the
+    /// first `len` bytes, exposing unused zero-padding as if it were part of
+    /// the secret. `CanonicalEntropy` only ever exposes the valid prefix via
+    /// `as_bytes`. Deliberately no `Debug`/`Display`/serialization impl.
+    pub(crate) struct CanonicalEntropy {
+        bytes: Zeroizing<[u8; 33]>,
+        len: usize,
+    }
+
+    impl CanonicalEntropy {
+        fn from_generated_16(entropy: Zeroizing<[u8; 16]>) -> Self {
+            let mut bytes = [0u8; 33];
+            bytes[..16].copy_from_slice(&entropy[..]);
+            Self {
+                bytes: Zeroizing::new(bytes),
+                len: 16,
+            }
+        }
+
+        fn from_raw_33(bytes: Zeroizing<[u8; 33]>, len: usize) -> Self {
+            Self { bytes, len }
+        }
+
+        /// The valid entropy bytes only — never the unused tail of the
+        /// underlying fixed-size buffer.
+        pub(crate) fn as_bytes(&self) -> &[u8] {
+            &self.bytes[..self.len]
+        }
+    }
+
+    /// Output of `create_wallet_v1`. Deliberately holds only what the future
+    /// trusted native stage needs: canonical entropy (for secure-storage
+    /// hand-off) and the mnemonic sentence (for one-time initial backup
+    /// display, ADR-004 §4). No seed, xpriv, private key, or passphrase
+    /// field exists here — the seed is derived and dropped internally.
+    ///
+    /// No `Debug`/`Display`/serialization is derived or implemented, since
+    /// this type carries secret material.
+    pub(crate) struct CreateWalletOutput {
+        pub entropy: CanonicalEntropy,
+        pub mnemonic: Mnemonic,
+        pub addresses: V1WalletAddresses,
+    }
+
+    /// Generates a new V1 wallet: OS-CSPRNG entropy → 12-word mnemonic →
+    /// seed (no passphrase — ADR-004 §7: V1 creation never offers one) →
+    /// V1 ETH/BTC addresses. The seed is dropped/zeroized before this
+    /// function returns; it never appears in `CreateWalletOutput`.
+    pub(crate) fn create_wallet_v1() -> Result<CreateWalletOutput, WalletError> {
+        let entropy = generate_v1_entropy()?;
+        let mnemonic = mnemonic_from_entropy(&entropy);
+        let seed = seed_from_mnemonic(&mnemonic, "");
+        let addresses = derive_v1_wallet_addresses(seed.as_slice());
+        // `seed` is dropped (and zeroized, Zeroizing<[u8;64]>) at the end of
+        // this function's scope, before control returns to the caller.
+        Ok(CreateWalletOutput {
+            entropy: CanonicalEntropy::from_generated_16(entropy),
+            mnemonic,
+            addresses,
+        })
+    }
+
+    /// Output of `import_wallet_v1`. Holds canonical entropy (for
+    /// secure-storage hand-off) and the PUBLIC address bundle only — never
+    /// the mnemonic, the passphrase, or the seed.
+    ///
+    /// No `Debug`/`Display`/serialization is derived or implemented, since
+    /// this type carries secret material.
+    pub(crate) struct ImportWalletOutput {
+        pub entropy: CanonicalEntropy,
+        pub addresses: V1WalletAddresses,
+    }
+
+    /// Imports an existing V1 wallet from a user-supplied mnemonic and an
+    /// explicitly supplied (never assumed) passphrase: validate → canonical
+    /// entropy → seed → V1 ETH/BTC addresses. The mnemonic and seed are
+    /// dropped/zeroized (via their own existing `ZeroizeOnDrop`/`Zeroizing`
+    /// behavior, unchanged from Stage 5C/5D.2) before this function returns;
+    /// neither appears in `ImportWalletOutput`, and the passphrase is never
+    /// stored anywhere, per ADR-005 §2.
+    pub(crate) fn import_wallet_v1(
+        words: &str,
+        passphrase: &str,
+    ) -> Result<ImportWalletOutput, WalletError> {
+        let mnemonic = parse_import_mnemonic(words)?;
+        let (entropy_bytes, len) = entropy_from_mnemonic(&mnemonic);
+        let seed = seed_from_mnemonic(&mnemonic, passphrase);
+        let addresses = derive_v1_wallet_addresses(seed.as_slice());
+        // `mnemonic` and `seed` are dropped at the end of this function's
+        // scope, before control returns to the caller.
+        Ok(ImportWalletOutput {
+            entropy: CanonicalEntropy::from_raw_33(entropy_bytes, len),
+            addresses,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -681,6 +783,125 @@ mod tests {
             let first = derive_v1_wallet_addresses(seed.as_slice());
             let second = derive_v1_wallet_addresses(seed.as_slice());
             assert_eq!(first, second);
+        }
+    }
+
+    mod v1_wallet_composition {
+        use super::super::wallet_secret::{
+            CreateWalletOutput, ImportWalletOutput, WalletError, create_wallet_v1, import_wallet_v1,
+        };
+
+        /// BIP-39 test vector 1 mnemonic — not a real recovered secret.
+        const ZERO_ENTROPY_12_WORD_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        #[test]
+        fn create_wallet_succeeds() {
+            // Never prints/logs/snapshots the generated mnemonic or entropy.
+            create_wallet_v1().expect("OS CSPRNG-backed creation should succeed");
+        }
+
+        #[test]
+        fn created_wallet_has_exactly_a_12_word_mnemonic() {
+            let output = create_wallet_v1().expect("create should succeed");
+            assert_eq!(output.mnemonic.word_count(), 12);
+        }
+
+        #[test]
+        fn created_wallet_returns_non_empty_public_addresses() {
+            let output = create_wallet_v1().expect("create should succeed");
+            assert!(output.addresses.ethereum.starts_with("0x"));
+            assert!(output.addresses.bitcoin_receive.starts_with("bc1q"));
+            assert!(output.addresses.bitcoin_change.starts_with("bc1q"));
+        }
+
+        #[test]
+        fn created_entropy_length_is_exactly_16_bytes() {
+            let output = create_wallet_v1().expect("create should succeed");
+            assert_eq!(output.entropy.as_bytes().len(), 16);
+        }
+
+        #[test]
+        fn create_wallet_output_has_no_extra_fields() {
+            // Destructuring names every field exactly; this fails to
+            // compile if a field (e.g. a seed) is ever silently added.
+            let output = create_wallet_v1().expect("create should succeed");
+            let CreateWalletOutput {
+                entropy: _,
+                mnemonic: _,
+                addresses: _,
+            } = output;
+        }
+
+        #[test]
+        fn import_of_reference_mnemonic_produces_established_addresses() {
+            let output = import_wallet_v1(ZERO_ENTROPY_12_WORD_MNEMONIC, "")
+                .expect("valid reference mnemonic");
+            assert_eq!(
+                output.addresses.ethereum,
+                "0x9858EfFD232B4033E47d90003D41EC34EcaEda94"
+            );
+            assert_eq!(
+                output.addresses.bitcoin_receive,
+                "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+            );
+            assert_eq!(
+                output.addresses.bitcoin_change,
+                "bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el"
+            );
+        }
+
+        #[test]
+        fn explicit_passphrase_changes_derived_addresses() {
+            let without_passphrase = import_wallet_v1(ZERO_ENTROPY_12_WORD_MNEMONIC, "")
+                .expect("valid mnemonic")
+                .addresses;
+            let with_passphrase = import_wallet_v1(ZERO_ENTROPY_12_WORD_MNEMONIC, "TREZOR")
+                .expect("valid mnemonic")
+                .addresses;
+            assert_ne!(without_passphrase, with_passphrase);
+        }
+
+        #[test]
+        fn import_invalid_word_count_propagates_error() {
+            // `ImportWalletOutput` deliberately has no Debug/PartialEq (it
+            // carries secret entropy), so `matches!` is used instead of
+            // `assert_eq!` — it needs neither.
+            let thirteen_words = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
+            assert!(matches!(
+                import_wallet_v1(thirteen_words, ""),
+                Err(WalletError::InvalidWordCount)
+            ));
+        }
+
+        #[test]
+        fn import_unrecognized_word_propagates_error() {
+            let bad_word = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon notabip39word";
+            assert!(matches!(
+                import_wallet_v1(bad_word, ""),
+                Err(WalletError::UnrecognizedWord)
+            ));
+        }
+
+        #[test]
+        fn import_checksum_invalid_mnemonic_propagates_error() {
+            let corrupted = "zoo abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+            assert!(matches!(
+                import_wallet_v1(corrupted, ""),
+                Err(WalletError::ChecksumFailed)
+            ));
+        }
+
+        #[test]
+        fn import_wallet_output_has_no_extra_fields() {
+            // Destructuring names every field exactly; this fails to
+            // compile if a field (e.g. a seed or the mnemonic) is ever
+            // silently added.
+            let output =
+                import_wallet_v1(ZERO_ENTROPY_12_WORD_MNEMONIC, "").expect("valid mnemonic");
+            let ImportWalletOutput {
+                entropy: _,
+                addresses: _,
+            } = output;
         }
     }
 }
