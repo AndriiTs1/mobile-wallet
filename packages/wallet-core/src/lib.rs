@@ -170,6 +170,104 @@ mod derivation {
     }
 }
 
+/// V1 wallet-secret primitives (BIP-39 entropy/mnemonic/seed), Stage 5D.2.
+///
+/// Rust-internal only: not exposed via UniFFI. No secret (entropy, mnemonic,
+/// seed, passphrase, key material) is handed off to native/React Native by
+/// anything in this module — that remains explicitly future work, gated on
+/// resolving the entropy-to-native-only UniFFI scoping question raised in
+/// the Stage 5D.1 design review.
+#[allow(dead_code)]
+mod wallet_secret {
+    use super::derivation::{
+        BitcoinAddressKindV1, derive_bitcoin_v1_address, derive_ethereum_v1_address,
+    };
+    use bip39::{Language, Mnemonic};
+    use zeroize::Zeroizing;
+
+    /// Structural, non-secret error categories (ADR-004 §15). Must never
+    /// embed a mnemonic word, passphrase, entropy, seed, or key material.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(crate) enum WalletError {
+        EntropyGenerationFailed,
+        InvalidWordCount,
+        UnrecognizedWord,
+        ChecksumFailed,
+    }
+
+    /// Generates V1 entropy (128-bit / 16 bytes, ADR-004 §3) from the OS
+    /// CSPRNG via `getrandom`. Deliberately takes no entropy/RNG parameter —
+    /// production wallet creation has exactly one entropy source.
+    pub(crate) fn generate_v1_entropy() -> Result<Zeroizing<[u8; 16]>, WalletError> {
+        let mut entropy = [0u8; 16];
+        getrandom::fill(&mut entropy).map_err(|_| WalletError::EntropyGenerationFailed)?;
+        Ok(Zeroizing::new(entropy))
+    }
+
+    /// Converts V1 entropy into its 12-word English BIP-39 mnemonic
+    /// (ADR-004 §2/§3). No word-count parameter: the fixed 16-byte input
+    /// already fixes the output at 12 words.
+    pub(crate) fn mnemonic_from_entropy(entropy: &[u8; 16]) -> Mnemonic {
+        Mnemonic::from_entropy_in(Language::English, entropy)
+            .expect("16 bytes is always valid BIP-39 entropy")
+    }
+
+    /// Parses/imports an English BIP-39 mnemonic (ADR-004 §2/§8): any
+    /// standard checksum-valid length (12/15/18/21/24 words). No network
+    /// call, no automatic passphrase, no language other than English.
+    pub(crate) fn parse_import_mnemonic(words: &str) -> Result<Mnemonic, WalletError> {
+        Mnemonic::parse_in(Language::English, words).map_err(|error| match error {
+            bip39::Error::BadWordCount(_) => WalletError::InvalidWordCount,
+            bip39::Error::UnknownWord(_) => WalletError::UnrecognizedWord,
+            bip39::Error::InvalidChecksum => WalletError::ChecksumFailed,
+            // parse_in fixes the language explicitly (English), so
+            // AmbiguousLanguages cannot occur; BadEntropyBitCount is only
+            // returned by from_entropy_in, never by mnemonic parsing.
+            // Mapped defensively rather than treated as unreachable.
+            bip39::Error::AmbiguousLanguages(_) | bip39::Error::BadEntropyBitCount(_) => {
+                WalletError::InvalidWordCount
+            }
+        })
+    }
+
+    /// Converts a parsed mnemonic back to its canonical BIP-39 entropy
+    /// (ADR-005 §2's persisted-secret form): the fixed-size buffer/length
+    /// pair `Mnemonic::to_entropy_array` already returns, avoiding a
+    /// heap-allocated `Vec` for secret material.
+    pub(crate) fn entropy_from_mnemonic(mnemonic: &Mnemonic) -> (Zeroizing<[u8; 33]>, usize) {
+        let (entropy, len) = mnemonic.to_entropy_array();
+        (Zeroizing::new(entropy), len)
+    }
+
+    /// Derives the BIP-39 seed from a mnemonic and an explicitly supplied
+    /// passphrase (ADR-004 §7). The passphrase is never cached or stored —
+    /// callers must supply it fresh for every derivation (ADR-005 §2).
+    pub(crate) fn seed_from_mnemonic(mnemonic: &Mnemonic, passphrase: &str) -> Zeroizing<[u8; 64]> {
+        Zeroizing::new(mnemonic.to_seed(passphrase))
+    }
+
+    /// Public-data-only V1 address bundle — safe to hold in ordinary
+    /// (non-secret) application state.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(crate) struct V1WalletAddresses {
+        pub ethereum: String,
+        pub bitcoin_receive: String,
+        pub bitcoin_change: String,
+    }
+
+    /// Composes the existing Stage 5B derivation functions only — no new
+    /// derivation path or cryptographic algorithm is introduced here.
+    pub(crate) fn derive_v1_wallet_addresses(seed: &[u8]) -> V1WalletAddresses {
+        V1WalletAddresses {
+            ethereum: derive_ethereum_v1_address(seed),
+            bitcoin_receive: derive_bitcoin_v1_address(seed, BitcoinAddressKindV1::Receive)
+                .to_string(),
+            bitcoin_change: derive_bitcoin_v1_address(seed, BitcoinAddressKindV1::Change)
+                .to_string(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +531,156 @@ mod tests {
 
             assert_ne!(ethereum, receive);
             assert_ne!(ethereum, change);
+        }
+    }
+
+    mod v1_wallet_secret {
+        use super::super::wallet_secret::{
+            V1WalletAddresses, WalletError, derive_v1_wallet_addresses, entropy_from_mnemonic,
+            generate_v1_entropy, mnemonic_from_entropy, parse_import_mnemonic, seed_from_mnemonic,
+        };
+        use bip39::Mnemonic;
+        use std::str::FromStr;
+
+        /// BIP-39 test vector 1 entropy/mnemonic — not a real recovered secret.
+        const ZERO_ENTROPY_12_WORD_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        #[test]
+        fn production_entropy_generation_succeeds() {
+            // Only checks the CSPRNG path doesn't error; never prints/logs the
+            // generated value.
+            let entropy = generate_v1_entropy().expect("OS CSPRNG should succeed");
+            assert_eq!(entropy.len(), 16);
+        }
+
+        #[test]
+        fn fixed_entropy_produces_expected_12_word_mnemonic() {
+            let entropy = [0u8; 16];
+            let mnemonic = mnemonic_from_entropy(&entropy);
+            assert_eq!(mnemonic.to_string(), ZERO_ENTROPY_12_WORD_MNEMONIC);
+        }
+
+        #[test]
+        fn mnemonic_to_entropy_round_trips() {
+            let entropy = [0u8; 16];
+            let mnemonic = mnemonic_from_entropy(&entropy);
+            let (recovered, len) = entropy_from_mnemonic(&mnemonic);
+            assert_eq!(len, 16);
+            assert_eq!(&recovered[..len], &entropy[..]);
+        }
+
+        #[test]
+        fn valid_12_word_import_succeeds() {
+            let mnemonic = mnemonic_from_entropy(&[0u8; 16]);
+            let imported = parse_import_mnemonic(&mnemonic.to_string()).expect("valid mnemonic");
+            assert_eq!(imported.to_string(), mnemonic.to_string());
+        }
+
+        #[test]
+        fn valid_15_word_import_succeeds() {
+            let entropy = [0u8; 20];
+            let mnemonic =
+                Mnemonic::from_entropy_in(bip39::Language::English, &entropy).expect("valid");
+            assert_eq!(mnemonic.word_count(), 15);
+            let imported = parse_import_mnemonic(&mnemonic.to_string()).expect("valid mnemonic");
+            assert_eq!(imported.to_string(), mnemonic.to_string());
+        }
+
+        #[test]
+        fn valid_18_word_import_succeeds() {
+            let entropy = [0u8; 24];
+            let mnemonic =
+                Mnemonic::from_entropy_in(bip39::Language::English, &entropy).expect("valid");
+            assert_eq!(mnemonic.word_count(), 18);
+            let imported = parse_import_mnemonic(&mnemonic.to_string()).expect("valid mnemonic");
+            assert_eq!(imported.to_string(), mnemonic.to_string());
+        }
+
+        #[test]
+        fn valid_21_word_import_succeeds() {
+            let entropy = [0u8; 28];
+            let mnemonic =
+                Mnemonic::from_entropy_in(bip39::Language::English, &entropy).expect("valid");
+            assert_eq!(mnemonic.word_count(), 21);
+            let imported = parse_import_mnemonic(&mnemonic.to_string()).expect("valid mnemonic");
+            assert_eq!(imported.to_string(), mnemonic.to_string());
+        }
+
+        #[test]
+        fn valid_24_word_import_succeeds() {
+            let entropy = [0u8; 32];
+            let mnemonic =
+                Mnemonic::from_entropy_in(bip39::Language::English, &entropy).expect("valid");
+            assert_eq!(mnemonic.word_count(), 24);
+            let imported = parse_import_mnemonic(&mnemonic.to_string()).expect("valid mnemonic");
+            assert_eq!(imported.to_string(), mnemonic.to_string());
+        }
+
+        #[test]
+        fn invalid_word_count_is_rejected() {
+            let thirteen_words = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
+            assert_eq!(
+                parse_import_mnemonic(thirteen_words),
+                Err(WalletError::InvalidWordCount)
+            );
+        }
+
+        #[test]
+        fn unrecognized_word_is_rejected() {
+            let bad_word = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon notabip39word";
+            assert_eq!(
+                parse_import_mnemonic(bad_word),
+                Err(WalletError::UnrecognizedWord)
+            );
+        }
+
+        #[test]
+        fn checksum_invalid_mnemonic_is_rejected() {
+            // Same word count and only wordlist words, but the substitution
+            // breaks the checksum relationship to the encoded entropy.
+            let corrupted = "zoo abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+            assert_eq!(
+                parse_import_mnemonic(corrupted),
+                Err(WalletError::ChecksumFailed)
+            );
+        }
+
+        #[test]
+        fn seed_from_mnemonic_matches_known_bip39_vector() {
+            let mnemonic = Mnemonic::from_str(ZERO_ENTROPY_12_WORD_MNEMONIC).expect("valid");
+            let seed = seed_from_mnemonic(&mnemonic, "TREZOR");
+            let expected_seed = [
+                0xc5, 0x52, 0x57, 0xc3, 0x60, 0xc0, 0x7c, 0x72, 0x02, 0x9a, 0xeb, 0xc1, 0xb5, 0x3c,
+                0x05, 0xed, 0x03, 0x62, 0xad, 0xa3, 0x8e, 0xad, 0x3e, 0x3e, 0x9e, 0xfa, 0x37, 0x08,
+                0xe5, 0x34, 0x95, 0x53, 0x1f, 0x09, 0xa6, 0x98, 0x75, 0x99, 0xd1, 0x82, 0x64, 0xc1,
+                0xe1, 0xc9, 0x2f, 0x2c, 0xf1, 0x41, 0x63, 0x0c, 0x7a, 0x3c, 0x4a, 0xb7, 0xc8, 0x1b,
+                0x2f, 0x00, 0x16, 0x98, 0xe7, 0x46, 0x3b, 0x04,
+            ];
+            assert_eq!(*seed, expected_seed);
+        }
+
+        #[test]
+        fn address_bundle_matches_established_reference_outputs() {
+            let mnemonic = Mnemonic::from_str(ZERO_ENTROPY_12_WORD_MNEMONIC).expect("valid");
+            let seed = seed_from_mnemonic(&mnemonic, "");
+            let addresses = derive_v1_wallet_addresses(seed.as_slice());
+            assert_eq!(
+                addresses,
+                V1WalletAddresses {
+                    ethereum: "0x9858EfFD232B4033E47d90003D41EC34EcaEda94".to_owned(),
+                    bitcoin_receive: "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu".to_owned(),
+                    bitcoin_change: "bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el".to_owned(),
+                }
+            );
+        }
+
+        #[test]
+        fn address_composition_is_deterministic() {
+            let mnemonic = Mnemonic::from_str(ZERO_ENTROPY_12_WORD_MNEMONIC).expect("valid");
+            let seed = seed_from_mnemonic(&mnemonic, "");
+            let first = derive_v1_wallet_addresses(seed.as_slice());
+            let second = derive_v1_wallet_addresses(seed.as_slice());
+            assert_eq!(first, second);
         }
     }
 }
