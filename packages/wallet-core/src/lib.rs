@@ -32,6 +32,38 @@ mod tests {
     }
 
     #[test]
+    fn bip32_reference_vector_1_matches() {
+        use bitcoin::Network;
+        use bitcoin::bip32::{DerivationPath, Xpriv};
+        use bitcoin::secp256k1::Secp256k1;
+        use std::str::FromStr;
+
+        let seed = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ];
+
+        let master = Xpriv::new_master(Network::Bitcoin, &seed).expect("valid BIP-32 master key");
+
+        assert_eq!(
+            master.to_string(),
+            "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi"
+        );
+
+        let secp = Secp256k1::new();
+        let path = DerivationPath::from_str("m/0'").expect("valid BIP-32 derivation path");
+
+        let child = master
+            .derive_priv(&secp, &path)
+            .expect("valid BIP-32 child derivation");
+
+        assert_eq!(
+            child.to_string(),
+            "xprv9uHRZZhk6KAJC1avXpDAp4MDc3sQKNxDiPvvkX8Br5ngLNv1TxvUxt4cV1rGL5hj6KCesnDYUhd7oWgT11eZG7XnxHrnYeSvkzY7d2bhkJ7"
+        );
+    }
+
+    #[test]
     fn bip39_reference_vector_1_matches() {
         let entropy = [0u8; 16];
 
