@@ -27,8 +27,10 @@ pub fn health_check() -> String {
 #[allow(dead_code)]
 mod derivation {
     use bitcoin::bip32::{DerivationPath, Xpriv};
-    use bitcoin::secp256k1::Secp256k1;
+    use bitcoin::secp256k1::{PublicKey as Secp256k1PublicKey, Secp256k1};
     use bitcoin::{Address, CompressedPublicKey, Network};
+    use sha3::{Digest, Keccak256};
+    use std::fmt::Write as _;
     use std::str::FromStr;
 
     /// The fixed set of V1 derivation paths Wallet Core controls (ADR-003 §2, §4).
@@ -98,6 +100,63 @@ mod derivation {
         let compressed_public_key = CompressedPublicKey::from_private_key(&secp, &private_key)
             .expect("BIP-32 derived private key always yields a compressed public key");
         Address::p2wpkh(&compressed_public_key, Network::Bitcoin)
+    }
+
+    /// Derives the Ethereum V1 address (ADR-003 §2, §8) from a BIP-32 seed, at
+    /// the fixed `m/44'/60'/0'/0/0` path only.
+    ///
+    /// Algorithm: derive the secp256k1 private key at the fixed V1 Ethereum
+    /// path, take its uncompressed public key, drop the `0x04` prefix byte,
+    /// Keccak-256 hash the remaining 64 bytes, and take the last 20 bytes as
+    /// the address. Returns the EIP-55 checksummed `0x`-prefixed display form.
+    ///
+    /// Internal only: not exposed via UniFFI. Returns only the address string —
+    /// the derived private key/public key never leave this function.
+    pub(crate) fn derive_ethereum_v1_address(seed: &[u8]) -> String {
+        let xpriv = derive_v1(seed, V1DerivationPath::EthereumV1);
+        let secp = Secp256k1::new();
+        let public_key = Secp256k1PublicKey::from_secret_key(&secp, &xpriv.private_key);
+        let uncompressed = public_key.serialize_uncompressed();
+
+        let hash = Keccak256::digest(&uncompressed[1..]);
+        let address_bytes = &hash[12..];
+
+        to_eip55_checksum_address(address_bytes)
+    }
+
+    /// Encodes a 20-byte Ethereum address as an EIP-55 mixed-case checksummed,
+    /// `0x`-prefixed hex string (ADR-003 §8).
+    fn to_eip55_checksum_address(address_bytes: &[u8]) -> String {
+        let lower_hex = to_lower_hex(address_bytes);
+        let hash = Keccak256::digest(lower_hex.as_bytes());
+
+        let mut checksummed = String::with_capacity(2 + lower_hex.len());
+        checksummed.push_str("0x");
+        for (i, ch) in lower_hex.chars().enumerate() {
+            if ch.is_ascii_alphabetic() {
+                let hash_byte = hash[i / 2];
+                let nibble = if i % 2 == 0 {
+                    hash_byte >> 4
+                } else {
+                    hash_byte & 0x0f
+                };
+                if nibble >= 8 {
+                    checksummed.push(ch.to_ascii_uppercase());
+                    continue;
+                }
+            }
+            checksummed.push(ch);
+        }
+        checksummed
+    }
+
+    /// Lowercase hex encoding, no `0x` prefix.
+    fn to_lower_hex(bytes: &[u8]) -> String {
+        let mut out = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            write!(out, "{byte:02x}").expect("writing to a String never fails");
+        }
+        out
     }
 }
 
@@ -282,6 +341,65 @@ mod tests {
             // testnet or non-SegWit-v0 address would not produce this prefix.
             assert!(receive.to_string().starts_with("bc1q"));
             assert!(change.to_string().starts_with("bc1q"));
+        }
+    }
+
+    mod v1_ethereum_address {
+        use super::super::derivation::{
+            BitcoinAddressKindV1, derive_bitcoin_v1_address, derive_ethereum_v1_address,
+        };
+        use bip39::Mnemonic;
+        use std::str::FromStr;
+
+        /// BIP-39 test vector 1 mnemonic, empty passphrase — not a real recovered
+        /// secret. Same mnemonic as `v1_bitcoin_addresses`, but Ethereum's
+        /// `m/44'/60'/.../0/0` branch is structurally disjoint from Bitcoin's
+        /// `m/84'/0'/...` branch (ADR-003 §9), so both derive from one seed safely.
+        const REFERENCE_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        /// Reference address for `m/44'/60'/0'/0/0` derived from
+        /// `REFERENCE_MNEMONIC` (empty passphrase), cross-checked independently
+        /// against two separate external implementations (ethers.js
+        /// `HDNodeWallet.fromPhrase` and the @scure/@noble bip32/bip39/secp256k1
+        /// stack), not derived from this crate's own implementation.
+        const EXPECTED_CHECKSUM_ADDRESS: &str = "0x9858EfFD232B4033E47d90003D41EC34EcaEda94";
+        const EXPECTED_LOWERCASE_ADDRESS: &str = "0x9858effd232b4033e47d90003d41ec34ecaeda94";
+
+        fn reference_seed() -> [u8; 64] {
+            let mnemonic = Mnemonic::from_str(REFERENCE_MNEMONIC).expect("valid BIP-39 mnemonic");
+            mnemonic.to_seed("")
+        }
+
+        #[test]
+        fn ethereum_v1_address_matches_reference_checksum() {
+            let address = derive_ethereum_v1_address(&reference_seed());
+            assert_eq!(address, EXPECTED_CHECKSUM_ADDRESS);
+        }
+
+        #[test]
+        fn ethereum_v1_address_matches_reference_lowercase() {
+            let address = derive_ethereum_v1_address(&reference_seed());
+            assert_eq!(address.to_lowercase(), EXPECTED_LOWERCASE_ADDRESS);
+        }
+
+        #[test]
+        fn ethereum_v1_address_derives_deterministically() {
+            let first = derive_ethereum_v1_address(&reference_seed());
+            let second = derive_ethereum_v1_address(&reference_seed());
+            assert_eq!(first, second);
+        }
+
+        #[test]
+        fn ethereum_address_is_distinct_from_bitcoin_v1_addresses() {
+            let ethereum = derive_ethereum_v1_address(&reference_seed());
+            let receive =
+                derive_bitcoin_v1_address(&reference_seed(), BitcoinAddressKindV1::Receive)
+                    .to_string();
+            let change = derive_bitcoin_v1_address(&reference_seed(), BitcoinAddressKindV1::Change)
+                .to_string();
+
+            assert_ne!(ethereum, receive);
+            assert_ne!(ethereum, change);
         }
     }
 }
