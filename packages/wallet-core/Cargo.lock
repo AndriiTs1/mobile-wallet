@@ -627,6 +627,7 @@ dependencies = [
  "bitcoin",
  "sha3",
  "uniffi",
+ "zeroize",
 ]
 
 [[package]]

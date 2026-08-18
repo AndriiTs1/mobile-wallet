@@ -10,6 +10,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize"] }
 bitcoin = { version = "0.32.7", default-features = false, features = ["std"] }
 sha3 = { version = "0.12.0", default-features = false }
+zeroize = { version = "1.9.0", default-features = false }
 # default-features = false: uniffi's "default" feature set pulls in cargo_metadata
 # (via its optional "cargo-metadata" feature) purely for `cargo metadata`-based crate
 # name/version auto-detection during bindgen — a host-tooling concern this crate

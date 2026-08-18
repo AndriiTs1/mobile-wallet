@@ -63,12 +63,17 @@ mod derivation {
     /// does not encode or return any chain-specific address.
     pub(crate) fn derive_v1(seed: &[u8], path: V1DerivationPath) -> Xpriv {
         let secp = Secp256k1::new();
-        let master = Xpriv::new_master(Network::Bitcoin, seed).expect("valid BIP-32 seed");
+        let mut master = Xpriv::new_master(Network::Bitcoin, seed).expect("valid BIP-32 seed");
         let derivation_path =
             DerivationPath::from_str(path.path_str()).expect("valid Wallet Core V1 path constant");
-        master
+        let child = master
             .derive_priv(&secp, &derivation_path)
-            .expect("valid BIP-32 child derivation")
+            .expect("valid BIP-32 child derivation");
+        // Best-effort erase of the discarded master key's own memory location.
+        // Xpriv/SecretKey are Copy, so this does NOT guarantee every
+        // compiler-made or historical copy of the master key is also erased.
+        master.private_key.non_secure_erase();
+        child
     }
 
     /// The two Bitcoin V1 address kinds Wallet Core derives (ADR-003 §4): the
@@ -94,11 +99,14 @@ mod derivation {
     /// Internal only: not exposed via UniFFI. Returns only the public address —
     /// the derived private key/public key never leave this function.
     pub(crate) fn derive_bitcoin_v1_address(seed: &[u8], kind: BitcoinAddressKindV1) -> Address {
-        let xpriv = derive_v1(seed, kind.path());
+        let mut xpriv = derive_v1(seed, kind.path());
         let secp = Secp256k1::new();
-        let private_key = xpriv.to_priv();
+        let mut private_key = xpriv.to_priv();
         let compressed_public_key = CompressedPublicKey::from_private_key(&secp, &private_key)
             .expect("BIP-32 derived private key always yields a compressed public key");
+        // Best-effort erase; see derive_v1's note on Copy-type limitations.
+        xpriv.private_key.non_secure_erase();
+        private_key.inner.non_secure_erase();
         Address::p2wpkh(&compressed_public_key, Network::Bitcoin)
     }
 
@@ -113,9 +121,11 @@ mod derivation {
     /// Internal only: not exposed via UniFFI. Returns only the address string —
     /// the derived private key/public key never leave this function.
     pub(crate) fn derive_ethereum_v1_address(seed: &[u8]) -> String {
-        let xpriv = derive_v1(seed, V1DerivationPath::EthereumV1);
+        let mut xpriv = derive_v1(seed, V1DerivationPath::EthereumV1);
         let secp = Secp256k1::new();
         let public_key = Secp256k1PublicKey::from_secret_key(&secp, &xpriv.private_key);
+        // Best-effort erase; see derive_v1's note on Copy-type limitations.
+        xpriv.private_key.non_secure_erase();
         let uncompressed = public_key.serialize_uncompressed();
 
         let hash = Keccak256::digest(&uncompressed[1..]);
@@ -292,6 +302,7 @@ mod tests {
         use super::super::derivation::{BitcoinAddressKindV1, derive_bitcoin_v1_address};
         use bip39::Mnemonic;
         use std::str::FromStr;
+        use zeroize::Zeroizing;
 
         /// BIP-84 spec's own test-vector mnemonic (also BIP-39 test vector 1),
         /// used here with an empty passphrase per the BIP-84 spec's own vectors —
@@ -304,38 +315,53 @@ mod tests {
         const BIP84_SPEC_FIRST_RECEIVE_ADDRESS: &str = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
         const BIP84_SPEC_FIRST_CHANGE_ADDRESS: &str = "bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el";
 
-        fn reference_seed() -> [u8; 64] {
+        // Zeroizing<[u8; 64]> zeroizes this owned seed buffer on drop.
+        fn reference_seed() -> Zeroizing<[u8; 64]> {
             let mnemonic = Mnemonic::from_str(BIP84_SPEC_MNEMONIC).expect("valid BIP-39 mnemonic");
-            mnemonic.to_seed("")
+            mnemonic.to_seed("").into()
         }
 
         #[test]
         fn receive_index_0_matches_bip84_spec_vector() {
-            let address =
-                derive_bitcoin_v1_address(&reference_seed(), BitcoinAddressKindV1::Receive);
+            let address = derive_bitcoin_v1_address(
+                reference_seed().as_slice(),
+                BitcoinAddressKindV1::Receive,
+            );
             assert_eq!(address.to_string(), BIP84_SPEC_FIRST_RECEIVE_ADDRESS);
         }
 
         #[test]
         fn change_index_0_matches_bip84_spec_vector() {
-            let address =
-                derive_bitcoin_v1_address(&reference_seed(), BitcoinAddressKindV1::Change);
+            let address = derive_bitcoin_v1_address(
+                reference_seed().as_slice(),
+                BitcoinAddressKindV1::Change,
+            );
             assert_eq!(address.to_string(), BIP84_SPEC_FIRST_CHANGE_ADDRESS);
         }
 
         #[test]
         fn receive_and_change_addresses_are_distinct() {
-            let receive =
-                derive_bitcoin_v1_address(&reference_seed(), BitcoinAddressKindV1::Receive);
-            let change = derive_bitcoin_v1_address(&reference_seed(), BitcoinAddressKindV1::Change);
+            let receive = derive_bitcoin_v1_address(
+                reference_seed().as_slice(),
+                BitcoinAddressKindV1::Receive,
+            );
+            let change = derive_bitcoin_v1_address(
+                reference_seed().as_slice(),
+                BitcoinAddressKindV1::Change,
+            );
             assert_ne!(receive.to_string(), change.to_string());
         }
 
         #[test]
         fn addresses_are_mainnet_native_segwit_bech32() {
-            let receive =
-                derive_bitcoin_v1_address(&reference_seed(), BitcoinAddressKindV1::Receive);
-            let change = derive_bitcoin_v1_address(&reference_seed(), BitcoinAddressKindV1::Change);
+            let receive = derive_bitcoin_v1_address(
+                reference_seed().as_slice(),
+                BitcoinAddressKindV1::Receive,
+            );
+            let change = derive_bitcoin_v1_address(
+                reference_seed().as_slice(),
+                BitcoinAddressKindV1::Change,
+            );
 
             // "bc1q" is the mainnet native-SegWit-v0 (P2WPKH) bech32 prefix; a
             // testnet or non-SegWit-v0 address would not produce this prefix.
@@ -350,6 +376,7 @@ mod tests {
         };
         use bip39::Mnemonic;
         use std::str::FromStr;
+        use zeroize::Zeroizing;
 
         /// BIP-39 test vector 1 mnemonic, empty passphrase — not a real recovered
         /// secret. Same mnemonic as `v1_bitcoin_addresses`, but Ethereum's
@@ -365,38 +392,44 @@ mod tests {
         const EXPECTED_CHECKSUM_ADDRESS: &str = "0x9858EfFD232B4033E47d90003D41EC34EcaEda94";
         const EXPECTED_LOWERCASE_ADDRESS: &str = "0x9858effd232b4033e47d90003d41ec34ecaeda94";
 
-        fn reference_seed() -> [u8; 64] {
+        // Zeroizing<[u8; 64]> zeroizes this owned seed buffer on drop.
+        fn reference_seed() -> Zeroizing<[u8; 64]> {
             let mnemonic = Mnemonic::from_str(REFERENCE_MNEMONIC).expect("valid BIP-39 mnemonic");
-            mnemonic.to_seed("")
+            mnemonic.to_seed("").into()
         }
 
         #[test]
         fn ethereum_v1_address_matches_reference_checksum() {
-            let address = derive_ethereum_v1_address(&reference_seed());
+            let address = derive_ethereum_v1_address(reference_seed().as_slice());
             assert_eq!(address, EXPECTED_CHECKSUM_ADDRESS);
         }
 
         #[test]
         fn ethereum_v1_address_matches_reference_lowercase() {
-            let address = derive_ethereum_v1_address(&reference_seed());
+            let address = derive_ethereum_v1_address(reference_seed().as_slice());
             assert_eq!(address.to_lowercase(), EXPECTED_LOWERCASE_ADDRESS);
         }
 
         #[test]
         fn ethereum_v1_address_derives_deterministically() {
-            let first = derive_ethereum_v1_address(&reference_seed());
-            let second = derive_ethereum_v1_address(&reference_seed());
+            let first = derive_ethereum_v1_address(reference_seed().as_slice());
+            let second = derive_ethereum_v1_address(reference_seed().as_slice());
             assert_eq!(first, second);
         }
 
         #[test]
         fn ethereum_address_is_distinct_from_bitcoin_v1_addresses() {
-            let ethereum = derive_ethereum_v1_address(&reference_seed());
-            let receive =
-                derive_bitcoin_v1_address(&reference_seed(), BitcoinAddressKindV1::Receive)
-                    .to_string();
-            let change = derive_bitcoin_v1_address(&reference_seed(), BitcoinAddressKindV1::Change)
-                .to_string();
+            let ethereum = derive_ethereum_v1_address(reference_seed().as_slice());
+            let receive = derive_bitcoin_v1_address(
+                reference_seed().as_slice(),
+                BitcoinAddressKindV1::Receive,
+            )
+            .to_string();
+            let change = derive_bitcoin_v1_address(
+                reference_seed().as_slice(),
+                BitcoinAddressKindV1::Change,
+            )
+            .to_string();
 
             assert_ne!(ethereum, receive);
             assert_ne!(ethereum, change);
