@@ -2,7 +2,6 @@ import { useRouter } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { ShieldMark } from '@/components/shield-mark';
 import { Colors, Spacing } from '@/constants/theme';
 
 const palette = Colors.dark;
@@ -31,8 +30,6 @@ export function ScreenHeader({ title, back = false }: ScreenHeaderProps) {
         </Pressable>
       ) : null}
       <View style={styles.identity}>
-        <ShieldMark size={26} />
-        <Text style={styles.wordmark}>Mobile Wallet</Text>
         {title ? <Text style={styles.title}>{title}</Text> : null}
       </View>
     </View>
@@ -63,16 +60,10 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
   },
-  wordmark: {
-    color: palette.text,
-    fontSize: 17,
-    fontWeight: '600',
-    letterSpacing: 0.1,
-  },
   title: {
-    color: palette.textSecondary,
-    fontSize: 14,
-    fontWeight: '500',
-    marginLeft: Spacing.one,
+    color: palette.text,
+    fontSize: 18,
+    fontWeight: '600',
+    letterSpacing: -0.2,
   },
 });

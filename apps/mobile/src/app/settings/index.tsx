@@ -44,7 +44,7 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   sections: {
-    marginTop: Spacing.five,
+    marginTop: Spacing.four,
   },
   footnote: {
     color: palette.textSecondary,
