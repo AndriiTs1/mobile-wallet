@@ -4,7 +4,6 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AssetRow } from '@/components/asset-row';
 import { PortfolioSparkline } from '@/components/portfolio-sparkline';
-import { ScreenHeader } from '@/components/screen-header';
 import { ScreenScaffold } from '@/components/screen-scaffold';
 import { Colors, Spacing } from '@/constants/theme';
 import { mockAssets, mockChartValues } from '@/constants/mock-portfolio';
@@ -42,7 +41,40 @@ export default function HomeScreen() {
         : palette.negative;
 
   return (
-    <ScreenScaffold header={<ScreenHeader />}>
+    <ScreenScaffold>
+      <View style={styles.homeTopBar}>
+        <Pressable
+          hitSlop={8}
+          style={({ pressed }) => [
+            styles.accountButton,
+            pressed && styles.topButtonPressed,
+          ]}>
+          <Text style={styles.accountLabel}>Account</Text>
+          <SymbolView
+            name={{ ios: 'chevron.down' }}
+            size={11}
+            tintColor={palette.textSecondary}
+            fallback={<Text style={styles.chevronFallback}>⌄</Text>}
+          />
+        </Pressable>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Scan QR code"
+          hitSlop={8}
+          style={({ pressed }) => [
+            styles.scannerButton,
+            pressed && styles.topButtonPressed,
+          ]}>
+          <SymbolView
+            name={{ ios: 'qrcode.viewfinder' }}
+            size={21}
+            tintColor={palette.text}
+            fallback={<Text style={styles.scannerFallback}>⌗</Text>}
+          />
+        </Pressable>
+      </View>
+
       <View style={styles.portfolioSection}>
         <Text style={styles.balanceLabel}>Total Balance</Text>
         <Text style={styles.balanceValue}>
@@ -115,13 +147,55 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  homeTopBar: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: Spacing.three,
+  },
+  accountButton: {
+    alignItems: 'center',
+    backgroundColor: palette.backgroundElement,
+    borderRadius: 18,
+    height: 36,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.three,
+  },
+  accountLabel: {
+    color: palette.text,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  scannerButton: {
+    alignItems: 'center',
+    backgroundColor: palette.backgroundElement,
+    borderRadius: 18,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  topButtonPressed: {
+    opacity: 0.55,
+  },
+  chevronFallback: {
+    color: palette.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  scannerFallback: {
+    color: palette.text,
+    fontSize: 18,
+    fontWeight: '600',
+  },
   portfolioSection: {
+    alignItems: 'center',
     marginTop: Spacing.four,
   },
   balanceLabel: {
     color: palette.textSecondary,
     fontSize: 13,
     fontWeight: '500',
+    textAlign: 'center',
   },
   balanceValue: {
     color: palette.text,
@@ -129,11 +203,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: -0.8,
     marginTop: 2,
+    textAlign: 'center',
   },
   changeRow: {
-    flexDirection: 'row',
     alignItems: 'baseline',
+    flexDirection: 'row',
     gap: Spacing.one,
+    justifyContent: 'center',
     marginTop: 4,
   },
   changeValue: {
@@ -146,6 +222,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   chartWrap: {
+    alignSelf: 'stretch',
     marginTop: Spacing.three + 2,
   },
   actionsRow: {
