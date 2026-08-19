@@ -88,15 +88,38 @@ final class WalletAppUnlockBridgeTests: XCTestCase {
         XCTAssertTrue(source.contains("try await WalletBackupPhrasePresenter.present()"))
     }
 
-    // MARK: - Not wired into any UI/lifecycle yet
+    // MARK: - Stage 5F.4B supersedes: now used, but ONLY by the approved gate
 
-    func testRequestAppUnlockIsNotReferencedInLayoutOrAppTabs() throws {
+    /// Stage 5F.4A asserted `requestAppUnlock` was referenced nowhere in
+    /// `_layout.tsx`/AppTabs at all — correct for that foundation-only
+    /// stage, before any UI wired it up. Stage 5F.4B intentionally
+    /// supersedes that: `AppLockGate` is the one approved production call
+    /// site. This re-expresses the still-valid part of the old invariant —
+    /// exactly one call site, structurally inside `AppLockGate`, which
+    /// never directly references `AppTabs` itself (it only ever reaches it
+    /// indirectly through `children`/`ProductionStartupGate` after
+    /// unlocking) — and that no broader auth/token/state API was
+    /// introduced alongside it.
+    func testRequestAppUnlockIsOnlyUsedByTheApprovedAppLockGatePath() throws {
         let layoutSource = try mobileAppSource(at: "src/app/_layout.tsx")
-        XCTAssertFalse(layoutSource.contains("requestAppUnlock"))
+
+        let occurrences = layoutSource.components(separatedBy: "requestAppUnlock()").count - 1
+        XCTAssertEqual(occurrences, 1, "requestAppUnlock() must be called exactly once in _layout.tsx")
+
+        let gateStart = try XCTUnwrap(layoutSource.range(of: "function AppLockGate("))
+        let gateEnd = try XCTUnwrap(layoutSource.range(of: "\n}", range: gateStart.upperBound..<layoutSource.endIndex))
+        let gateBody = layoutSource[gateStart.upperBound..<gateEnd.lowerBound]
+
+        XCTAssertTrue(gateBody.contains("requestAppUnlock()"), "the sole call site must live inside AppLockGate")
+        XCTAssertFalse(gateBody.contains("AppTabs"), "AppLockGate must not directly reference AppTabs")
+
+        for term in ["authToken", "biometricToken", "isAuthenticated", "AsyncStorage", "SecureStore", "UserDefaults"] {
+            XCTAssertFalse(layoutSource.contains(term), "_layout.tsx must not expose \(term)")
+        }
 
         for filename in ["app-tabs.tsx", "app-tabs.web.tsx"] {
             let source = try mobileAppSource(at: "src/components/\(filename)")
-            XCTAssertFalse(source.contains("requestAppUnlock"))
+            XCTAssertFalse(source.contains("requestAppUnlock"), "\(filename) must not reference requestAppUnlock directly")
         }
     }
 

@@ -1,9 +1,10 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { StyleSheet, View, useColorScheme } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
+import { AppLockScreen } from '@/components/app-lock-screen';
 import AppTabs from '@/components/app-tabs';
 import { CreateWalletScreen } from '@/components/create-wallet-screen';
 import { Colors } from '@/constants/theme';
@@ -14,6 +15,7 @@ import {
   hasWallet,
   presentBackupPhrase,
   presentBackupPhrasePreview,
+  requestAppUnlock,
 } from '@/services/wallet-core-bridge';
 
 SplashScreen.preventAutoHideAsync();
@@ -71,10 +73,118 @@ export default function TabLayout() {
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <MarketDataProvider>
         <AnimatedSplashOverlay />
-        {DEVELOPMENT_SHOWCASE_MODE ? <ShowcaseCreateWalletGate /> : <ProductionStartupGate />}
+        {DEVELOPMENT_SHOWCASE_MODE ? (
+          <ShowcaseCreateWalletGate />
+        ) : (
+          <AppLockGate>
+            <ProductionStartupGate />
+          </AppLockGate>
+        )}
       </MarketDataProvider>
     </ThemeProvider>
   );
+}
+
+/**
+ * Stage 5F.4B — cold-launch App Lock gate. Wraps ONLY the production
+ * startup path (`ProductionStartupGate`) — Showcase Mode
+ * (`ShowcaseCreateWalletGate`) is deliberately excluded (see this file's
+ * own render tree above), per this stage's own approved audit: Showcase
+ * Mode is `__DEV__`-only (always `false`/unreachable in a release build,
+ * so gating it has no production security consequence either way) and its
+ * entire purpose is repeatable dev preview without wallet-state-driven
+ * friction.
+ *
+ * `children` (i.e. `ProductionStartupGate`, and therefore `AppTabs` and the
+ * existing `backupRequired`/`walletReady` resume logic) is only ever
+ * returned from this component's `noLockNeeded`/`unlocked` branches — every
+ * other branch renders `AppLockScreen` instead. This is a structural,
+ * render-tree gate: `children` is simply absent from the returned element
+ * tree (and therefore never mounted, never in the native view hierarchy)
+ * until a wallet doesn't exist, or `requestAppUnlock()` has genuinely
+ * resolved — never merely hidden behind `AnimatedSplashOverlay` or any
+ * opacity/z-order trick.
+ *
+ * `requestAppUnlock()`'s own contract (Stage 5F.4A) is untouched: resolves
+ * `Promise<void>` only on success, rejects on failure/cancellation/
+ * unavailability, carries no boolean/token/OS-error detail. This gate's
+ * `phase` is ephemeral `useState`, scoped to this component instance —
+ * never written to AsyncStorage/SecureStore/UserDefaults/anywhere else, and
+ * therefore never survives process death, exactly like every other
+ * in-memory-only piece of state already established in this codebase (e.g.
+ * `WalletBackupVerificationView`'s `failedAttempts`). `phase === 'unlocked'`
+ * is app-UI-access gating ONLY — it is never read by, passed to, or in any
+ * way connected to `requestRevealBackup()`/`WalletBackupPhrasePresenter`
+ * (recovery-phrase reveal) or any future signing code, both of which
+ * remain entirely independent and continue to perform their own fresh
+ * native authentication regardless of this gate's state.
+ */
+type AppLockPhase =
+  | { phase: 'noLockNeeded' }
+  | { phase: 'locked' }
+  | { phase: 'authenticating' }
+  | { phase: 'unlocked' }
+  | { phase: 'authError' };
+
+function AppLockGate({ children }: { children: ReactNode }) {
+  const [phase, setPhase] = useState<AppLockPhase>(() => {
+    try {
+      // hasWallet() === true, or the read itself throwing, both fail
+      // closed into 'locked' — an unknown wallet-existence state must
+      // never be interpreted as "no wallet, no lock needed."
+      return hasWallet() ? { phase: 'locked' } : { phase: 'noLockNeeded' };
+    } catch {
+      return { phase: 'locked' };
+    }
+  });
+  // Guards against requestAppUnlock() being issued more than once
+  // concurrently for the same continuous stay in 'locked' (e.g. a
+  // re-render before the native call's promise has settled) — same
+  // single-flight pattern ProductionStartupGate's own backup-resume effect
+  // already uses.
+  const unlockInFlightRef = useRef(false);
+
+  useEffect(() => {
+    if (phase.phase !== 'locked') {
+      unlockInFlightRef.current = false;
+      return;
+    }
+    if (unlockInFlightRef.current) {
+      return;
+    }
+    unlockInFlightRef.current = true;
+    setPhase({ phase: 'authenticating' });
+
+    // Exactly one fresh call per 'locked' entry — never a cached/reused
+    // Promise. Only the success branch below may ever set 'unlocked'.
+    requestAppUnlock()
+      .then(() => {
+        unlockInFlightRef.current = false;
+        setPhase({ phase: 'unlocked' });
+      })
+      .catch(() => {
+        // Rejection (failure/cancellation/unavailability) never becomes
+        // 'unlocked' — protected children remain unmounted, and the user
+        // is offered an explicit retry via AppLockScreen below.
+        unlockInFlightRef.current = false;
+        setPhase({ phase: 'authError' });
+      });
+  }, [phase.phase]);
+
+  const handleRetry = useCallback(() => {
+    // Re-enters 'locked', which re-triggers the effect above and issues a
+    // genuinely fresh requestAppUnlock() call — never the previous
+    // attempt's Promise/result.
+    setPhase({ phase: 'locked' });
+  }, []);
+
+  if (phase.phase === 'noLockNeeded' || phase.phase === 'unlocked') {
+    return <>{children}</>;
+  }
+  // 'locked' (about to issue a call) and 'authenticating' (call in
+  // flight) both render the same non-error, in-progress presentation;
+  // only 'authError' shows the retry affordance.
+  return <AppLockScreen isAuthenticating={phase.phase !== 'authError'} onRetry={handleRetry} />;
 }
 
 /**
