@@ -40,12 +40,21 @@ export function ScreenScaffold({ header, children, contentStyle }: ScreenScaffol
   });
 
   const contentPlatformStyle = Platform.select({
-    // iOS: reserve the clearance as real layout padding, not `contentInset` —
-    // `contentInset` only shifts the native UIScrollView's own inset accounting,
-    // which this floating-tab-bar/clipped-viewport setup does not reliably honor
-    // at rest (verified: content can scroll fully behind the tab bar with
-    // `contentInset` alone). Padding is a guaranteed, ordinary layout value.
+    // iOS: reserve top/bottom clearance as real layout padding, not
+    // `contentInset` — `contentInset` only shifts the native UIScrollView's
+    // own inset accounting, which this floating-tab-bar/clipped-viewport
+    // setup does not reliably honor at rest (verified: content can scroll
+    // fully behind the tab bar with `contentInset` alone). Top clearance
+    // has the identical reliability gap: physical-device QA found the top
+    // safe-area inset can be transiently stale immediately after a fresh
+    // mount (e.g. `AppLockGate`'s background re-lock cycle remounting
+    // `AppTabs`), leaving header-less content rendered under the status
+    // bar when top clearance depended solely on `contentInset.top`.
+    // Padding is a guaranteed, ordinary layout value either way. Matches
+    // the `header ? undefined : insets.top` pattern the Android branch
+    // below already uses.
     ios: {
+      paddingTop: header ? undefined : insets.top,
       paddingBottom: insets.bottom,
     },
     android: {
@@ -78,7 +87,12 @@ export function ScreenScaffold({ header, children, contentStyle }: ScreenScaffol
       <View style={styles.viewport}>
         <ScrollView
           style={styles.scroll}
-          contentInset={{ ...insets, bottom: 0 }}
+          // `top`/`bottom` are both explicitly zeroed here — both are now
+          // handled as real `paddingTop`/`paddingBottom` above (iOS
+          // branch), so `contentInset` must not also apply them, which
+          // would double the clearance. `left`/`right` are untouched,
+          // still sourced from `insets` — unaffected by this fix.
+          contentInset={{ ...insets, top: 0, bottom: 0 }}
           contentContainerStyle={[styles.contentContainer, contentPlatformStyle]}
           showsVerticalScrollIndicator={false}>
           <View style={[styles.container, contentStyle]}>
