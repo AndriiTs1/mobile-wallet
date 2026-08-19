@@ -1,6 +1,6 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, View, useColorScheme } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
@@ -10,6 +10,7 @@ import { Colors } from '@/constants/theme';
 import { MarketDataProvider } from '@/providers/market-data-provider';
 import {
   createWalletAndPresentBackup,
+  hasBackupConfirmed,
   hasWallet,
   presentBackupPhrase,
 } from '@/services/wallet-core-bridge';
@@ -26,26 +27,42 @@ const GENERIC_CREATE_ERROR = 'Something went wrong creating your wallet. Please 
  * active development, even on a device that already has a real wallet —
  * the existing wallet is never recreated (see `ShowcaseCreateWalletGate`'s
  * safety check below). Production startup routing (`ProductionStartupGate`,
- * unmodified from Stage 5E.6/5E.6B) remains entirely wallet-state-driven
- * and is the only path taken in a release build, since `__DEV__` is a
- * build-time constant that is always `false` there.
+ * unaffected by Showcase Mode — see its own Stage 5E.9E1 doc comment below)
+ * remains entirely wallet-state-driven and is the only path taken in a
+ * release build, since `__DEV__` is a build-time constant that is always
+ * `false` there.
+ *
+ * Known Stage 5E.9E1 limitation, intentionally left unfixed here (deferred
+ * to Stage 5E.9E2): `ShowcaseCreateWalletGate`'s existing-wallet branch
+ * below still calls the real `presentBackupPhrase()` — if a developer runs
+ * it to completion against a real wallet, the native verification screen's
+ * success path (`WalletBackupVerificationView`, Stage 5E.9D) genuinely
+ * calls `WalletBackupConfirmationStore.markConfirmed()` for that real
+ * wallet, same as production would. This gate is unchanged in this stage.
  */
 const DEVELOPMENT_SHOWCASE_MODE = __DEV__;
 
 /**
- * Stage 5E.6 — temporary startup gate. `hasWallet()` is a structural
- * existence check only (does secure wallet storage exist?), NOT a proxy
- * for "backup confirmed" — a future 5E.x stage will add persisted
- * `backupConfirmed` state and refine this into three real states:
- *   no wallet  |  wallet exists / backup incomplete  |  wallet ready
- * For now, `walletExists` routes straight to the existing Home/tab
- * screens; it does not claim the backup phrase was ever written down.
+ * Stage 5E.9E1 — the final production three-state startup/resume model,
+ * replacing Stage 5E.6's temporary two-state placeholder (`noWallet` /
+ * `walletExists`, the latter previously routing straight to Home without
+ * regard for backup confirmation). Native storage is the sole source of
+ * truth for all three states — nothing here is persisted in JS:
+ *
+ *   A. `hasWallet() == false`
+ *      -> `noWallet` (Create Wallet onboarding)
+ *   B. `hasWallet() == true && hasBackupConfirmed() == false`
+ *      -> `backupRequired` (resume the EXISTING wallet's backup flow via
+ *         `presentBackupPhrase()` only — never `createWalletAndPresentBackup()`)
+ *   C. `hasWallet() == true && hasBackupConfirmed() == true`
+ *      -> `walletReady` (Home / `AppTabs`)
  */
 type StartupState =
   | { status: 'checking' }
   | { status: 'noWallet' }
   | { status: 'creating' }
-  | { status: 'walletExists' }
+  | { status: 'backupRequired' }
+  | { status: 'walletReady' }
   | { status: 'error'; message: string };
 
 export default function TabLayout() {
@@ -62,19 +79,36 @@ export default function TabLayout() {
 }
 
 /**
- * Unchanged production startup routing (Stage 5E.6/5E.6B): `hasWallet()`
- * decides noWallet vs. walletExists at launch; a real create/persist call
- * is the only path to walletExists; failure re-checks `hasWallet()` to
- * avoid the partial-success trap (persistence may have succeeded even
- * though backup-screen presentation then failed). Never reached when
- * Showcase Mode is active.
+ * Production startup routing — the three-state model documented on
+ * `StartupState` above. Never reached when Showcase Mode is active.
  */
 function ProductionStartupGate() {
   const [state, setState] = useState<StartupState>({ status: 'checking' });
+  // Guards against `presentBackupPhrase()` being triggered more than once
+  // concurrently for the same continuous stay in `backupRequired` (e.g. a
+  // re-render before the native call's promise has settled) — see the
+  // resume effect below. Reset whenever `state.status` leaves
+  // `backupRequired`, so a later, genuinely new entry into that status
+  // (within the same session) is still allowed to attempt resume again;
+  // this is a re-render guard, not a permanent one-shot flag.
+  const backupResumeInFlightRef = useRef(false);
 
-  const refreshHasWallet = useCallback(() => {
+  /**
+   * The one authoritative refresh function for this gate. Always re-reads
+   * native truth in the required order — never trusts a locally-held
+   * flag after any operation completes, and never reads
+   * `hasBackupConfirmed()` when no wallet exists at all (state A doesn't
+   * need or want that read).
+   */
+  const refreshStartupState = useCallback(() => {
     try {
-      setState(hasWallet() ? { status: 'walletExists' } : { status: 'noWallet' });
+      const walletExists = hasWallet();
+      if (!walletExists) {
+        setState({ status: 'noWallet' });
+        return;
+      }
+      const confirmed = hasBackupConfirmed();
+      setState(confirmed ? { status: 'walletReady' } : { status: 'backupRequired' });
     } catch {
       // Generic only — never surfaces native error text (Keychain/OSStatus
       // detail, module-load failure message, etc.) to the user.
@@ -83,8 +117,43 @@ function ProductionStartupGate() {
   }, []);
 
   useEffect(() => {
-    refreshHasWallet();
-  }, [refreshHasWallet]);
+    refreshStartupState();
+  }, [refreshStartupState]);
+
+  /**
+   * State B resume: automatically presents the EXISTING wallet's native
+   * backup flow exactly once per continuous stay in `backupRequired`.
+   * Deliberately calls `presentBackupPhrase()` only — never
+   * `createWalletAndPresentBackup()` — since a wallet already exists by
+   * definition of being in this state; resuming must only ever
+   * reconstruct its existing phrase from its existing persisted entropy,
+   * never generate new entropy, overwrite storage, or create a second
+   * wallet.
+   */
+  useEffect(() => {
+    if (state.status !== 'backupRequired') {
+      backupResumeInFlightRef.current = false;
+      return;
+    }
+    if (backupResumeInFlightRef.current) {
+      return;
+    }
+    backupResumeInFlightRef.current = true;
+
+    presentBackupPhrase()
+      .catch(() => {
+        // Swallow — an interrupted or failed resume attempt is handled
+        // identically to a successful one below: re-read native truth
+        // rather than assuming either outcome. `backupConfirmed` only
+        // ever becomes true via a genuine successful verification (Stage
+        // 5E.9D), so if this rejected or was interrupted, the re-read
+        // below will correctly land back on `backupRequired` again.
+      })
+      .then(() => {
+        backupResumeInFlightRef.current = false;
+        refreshStartupState();
+      });
+  }, [state.status, refreshStartupState]);
 
   const handleCreate = useCallback(async () => {
     // Never allow double-submit: the button is disabled while creating,
@@ -94,23 +163,23 @@ function ProductionStartupGate() {
 
     try {
       await createWalletAndPresentBackup();
-      // 5. Success: secure native storage is the authoritative source of
-      // truth for this temporary stage — re-check it rather than trusting
-      // a locally-held "created" flag.
-      refreshHasWallet();
+      // Success: re-read native truth rather than trusting a locally-held
+      // "created" flag. Expected result after the real create + backup +
+      // verification flow: hasWallet() == true && hasBackupConfirmed() ==
+      // true -> walletReady -> Home.
+      refreshStartupState();
     } catch {
-      // 6. Failure: createAndPersist() may have already succeeded even
-      // though backup-screen presentation then failed (a known partial-
-      // success edge case) — re-checking hasWallet() closes that trap
-      // instead of offering a "Create Wallet" action that would only hit
-      // the existing duplicate-storage rejection.
+      // createAndPersist() may have already succeeded even though the
+      // native flow then failed or was interrupted before backup
+      // verification completed (a known partial-success edge case).
       try {
         if (hasWallet()) {
-          // Persistence already succeeded. Temporary: route to the
-          // existing Home/tab state for now — proper backup-resume
-          // handling (re-showing the backup phrase, tracking
-          // backupConfirmed) is a later 5E.x stage, not this one.
-          setState({ status: 'walletExists' });
+          // Persistence already succeeded — re-read the full authoritative
+          // state rather than assuming Home. This correctly lands on
+          // `backupRequired` (not `walletReady`) when the wallet exists
+          // but verification never completed, which then resumes via the
+          // effect above — never a premature jump to Home.
+          refreshStartupState();
         } else {
           setState({ status: 'error', message: GENERIC_CREATE_ERROR });
         }
@@ -118,12 +187,17 @@ function ProductionStartupGate() {
         setState({ status: 'error', message: GENERIC_CREATE_ERROR });
       }
     }
-  }, [refreshHasWallet]);
+  }, [refreshStartupState]);
 
-  if (state.status === 'walletExists') {
+  if (state.status === 'walletReady') {
     return <AppTabs />;
   }
-  if (state.status === 'checking') {
+  if (state.status === 'checking' || state.status === 'backupRequired') {
+    // Same brief, splash-covered placeholder for both: `backupRequired`
+    // renders it only for the moment before the native full-screen backup
+    // presentation takes over (triggered by the resume effect above) —
+    // never Create Wallet (a wallet already exists) and never Home (backup
+    // isn't confirmed yet).
     return <View style={styles.checkingContainer} />;
   }
   return (
