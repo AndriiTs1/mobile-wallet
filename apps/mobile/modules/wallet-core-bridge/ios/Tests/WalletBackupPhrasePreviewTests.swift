@@ -147,6 +147,29 @@ final class WalletBackupPhrasePreviewTests: XCTestCase {
         XCTAssertTrue(freshWalletBranch.contains("createWalletAndPresentBackup()"))
     }
 
+    // MARK: - Stage 5E.9E3, Part A: existing-wallet preview success -> Home
+
+    func testShowcaseExistingWalletBranchSetsCompletedTrueOnPreviewSuccess() throws {
+        let (existingWalletBranch, _) = try showcaseGateBranches(in: try rnLayoutSource())
+        XCTAssertTrue(
+            existingWalletBranch.contains("setState({ isCreating: false, errorMessage: null, completed: true });"),
+            "existing-wallet preview success must set completed: true, routing to Home — Stage 5E.9E3"
+        )
+    }
+
+    func testCompletedTrueRendersAppTabs() throws {
+        let source = try rnLayoutSource()
+        let gateRange = try XCTUnwrap(source.range(of: "function ShowcaseCreateWalletGate()"))
+        let gateBody = source[gateRange.upperBound...]
+        XCTAssertTrue(gateBody.contains("if (state.completed) {"))
+        XCTAssertTrue(gateBody.contains("return <AppTabs />;"))
+    }
+
+    func testShowcaseExistingWalletBranchNeverCreatesAnotherWallet() throws {
+        let (existingWalletBranch, _) = try showcaseGateBranches(in: try rnLayoutSource())
+        XCTAssertFalse(existingWalletBranch.contains("createWalletAndPresentBackup"))
+    }
+
     func testProductionStartupGateNeverReferencesPreviewAPI() throws {
         let source = try rnLayoutSource()
         let gateRange = try XCTUnwrap(source.range(of: "function ProductionStartupGate()"))

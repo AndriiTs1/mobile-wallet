@@ -133,6 +133,14 @@ struct WalletBackupPhraseView: View {
     /// mechanism this stage's own instruction prefers over a
     /// `NavigationStack`/broader navigation architecture.
     @State private var isVerifying = false
+    /// Stage 5E.9E3 (final correction): set only by
+    /// `WalletBackupVerificationView`'s `onAttemptsExhausted` callback
+    /// (the third failed verification attempt in a session) — shown as a
+    /// small, non-alarming guidance banner on this phrase screen, cleared
+    /// the moment the user presses Continue again (see `ctaButton`). Pure
+    /// presentational state, entirely local to this view; never persisted,
+    /// never leaves this native flow.
+    @State private var showAttemptsExhaustedNotice = false
 
     /// Stage 5E.9E2: the completion policy for a successful verification —
     /// passed straight through to `WalletBackupVerificationView` (see its
@@ -216,7 +224,20 @@ struct WalletBackupPhraseView: View {
                 WalletBackupVerificationView(
                     mnemonic: mnemonic,
                     onVerificationSucceeded: onVerificationSucceeded,
-                    onVerified: onWrittenDown
+                    onVerified: onWrittenDown,
+                    // Stage 5E.9E3 (final correction): the third failed
+                    // attempt returns here — this view's own
+                    // `isVerifying = false` is the exact same mechanism
+                    // already used for backgrounding/interruption above,
+                    // so `WalletBackupVerificationView`'s selections/
+                    // error/attempt-count state is discarded identically
+                    // either way (its `@State` dies when this branch stops
+                    // rendering it). No wallet action of any kind happens
+                    // here — this is pure local flow-state routing.
+                    onAttemptsExhausted: {
+                        isVerifying = false
+                        showAttemptsExhaustedNotice = true
+                    }
                 )
             } else {
                 phraseView(mnemonic: mnemonic)
@@ -243,12 +264,33 @@ struct WalletBackupPhraseView: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
+                if showAttemptsExhaustedNotice {
+                    attemptsExhaustedNotice
+                }
                 wordGrid(words: words)
                 safetyNote
                 ctaButton
             }
             .padding(20)
         }
+    }
+
+    /// Stage 5E.9E3 (final correction): shown only after returning here
+    /// from a third failed verification attempt. Deliberately neutral/
+    /// calm treatment (muted secondary text on a graphite surface, no
+    /// red/warning color) — this is guidance, not an error: the user
+    /// hasn't done anything wrong, they just need to re-check their
+    /// written backup against the full phrase below.
+    private var attemptsExhaustedNotice: some View {
+        Text("Review your recovery phrase and try again.")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundColor(Palette.textSecondary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Palette.surface)
+            .cornerRadius(12)
     }
 
     private var header: some View {
@@ -398,7 +440,16 @@ struct WalletBackupPhraseView: View {
         // `WalletBackupVerificationView` (`isVerifying = true`). The label
         // stays accurate either way: "Continue" has always meant "move to
         // the next required step," never "this is complete."
-        Button(action: { isVerifying = true }) {
+        //
+        // Stage 5E.9E3: also clears `showAttemptsExhaustedNotice` — a
+        // fresh verification session is about to start (a brand new
+        // `WalletBackupVerificationView` instance, with `failedAttempts`
+        // starting at 0 again), so any leftover guidance from a prior
+        // exhausted session no longer applies.
+        Button(action: {
+            isVerifying = true
+            showAttemptsExhaustedNotice = false
+        }) {
             Text("Continue")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundColor(Palette.background)

@@ -227,17 +227,25 @@ type ShowcaseState = {
  * (see `WalletBackupPhrasePresenter.present()`), not merely once it
  * appears.
  *
- * Stage 5E.9E2: the existing-wallet branch below now calls the DEV-ONLY
+ * Stage 5E.9E2: the existing-wallet branch below calls the DEV-ONLY
  * `presentBackupPhrasePreview()` instead of the real `presentBackupPhrase()`
  * — the real backup/verification screen's successful-verification path
  * now genuinely writes `backupConfirmed` (Stage 5E.9D), so previewing it
  * against a real wallet must never be able to mutate that wallet's real
- * confirmation state. This branch therefore also no longer routes to Home
- * afterward (`backupConfirmed` is deliberately left exactly as it was) —
- * it returns to this same showcase screen so the flow can be previewed
- * repeatedly. The fresh-wallet branch is unchanged: that wallet is
- * genuinely created through the real flow, so routing to Home afterward
- * (a truthfully confirmed backup) remains correct, same as production.
+ * confirmation state (see `presentBackupPhrasePreview()`'s own doc
+ * comment — the DEV-only native completion policy never calls
+ * `markConfirmed()`, regardless of what this branch does with the
+ * resolved promise).
+ *
+ * Stage 5E.9E3: physical QA asked for a completed preview to route to
+ * Home, same as the fresh-wallet branch, rather than returning to this
+ * showcase screen — this branch now sets `completed: true` on successful
+ * preview completion. This is purely presentational routing: it has no
+ * bearing on `backupConfirmed` itself, which the preview path still never
+ * touches either way. On the next full app restart, `hasWallet()` is
+ * still `true` and this component remounts fresh, so Showcase Mode
+ * starts over from the Create Wallet screen again, as intended for
+ * repeated demos.
  */
 function ShowcaseCreateWalletGate() {
   const [state, setState] = useState<ShowcaseState>({
@@ -260,9 +268,12 @@ function ShowcaseCreateWalletGate() {
         // DEV-ONLY preview (Stage 5E.9E2) — reveals the existing wallet's
         // own already-persisted phrase and lets the verification screen
         // be exercised visually, but never marks that real wallet's
-        // backup confirmed either way.
+        // backup confirmed either way (see this function's own doc
+        // comment). Stage 5E.9E3: routes to Home on completion, same as
+        // the fresh-wallet branch below — purely presentational, doesn't
+        // touch backupConfirmed.
         await presentBackupPhrasePreview();
-        setState({ isCreating: false, errorMessage: null, completed: false });
+        setState({ isCreating: false, errorMessage: null, completed: true });
       } else {
         // No wallet yet on this dev device — exercise the real, genuine
         // create/persist/backup-present flow, unmodified. This wallet is

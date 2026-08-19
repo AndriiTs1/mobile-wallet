@@ -22,10 +22,14 @@ final class WalletBackupVerificationViewTests: XCTestCase {
 
     func testPhraseScreenContinueTransitionsToVerificationNotCompletion() throws {
         let source = try codeOnlySource(of: "WalletBackupPhraseView.swift")
-        XCTAssertTrue(
-            source.contains("Button(action: { isVerifying = true })"),
-            "Continue must flip local flow state to verification"
-        )
+        // Stage 5E.9E3 (final correction): Continue's action closure grew
+        // a second statement (clearing `showAttemptsExhaustedNotice`), so
+        // this is bounded rather than a single-line literal match.
+        let buttonRange = try XCTUnwrap(source.range(of: "Button(action: {"))
+        let closingRange = try XCTUnwrap(source.range(of: "}) {", range: buttonRange.upperBound..<source.endIndex))
+        let actionBody = source[buttonRange.upperBound..<closingRange.lowerBound]
+        XCTAssertTrue(actionBody.contains("isVerifying = true"), "Continue must flip local flow state to verification")
+
         XCTAssertFalse(
             source.contains("Button(action: onWrittenDown)"),
             "Continue must no longer call onWrittenDown directly"
@@ -116,21 +120,27 @@ final class WalletBackupVerificationViewTests: XCTestCase {
         XCTAssertFalse(source.contains("WalletBackupConfirmationStore"))
     }
 
-    // MARK: - I: failed verification regenerates positions/model
+    // MARK: - I: failed verification clears selections, keeps the SAME model
+    //
+    // Stage 5E.9E3 (final correction): superseded the original Stage
+    // 5E.9D "regenerate a fresh model on every wrong answer" design — the
+    // final, correct behavior keeps the same 3 questions across all 3
+    // attempts in a session and only regenerates for a genuinely new
+    // session. See `WalletBackupVerificationRecoveryTests.swift` for the
+    // full, up-to-date attempt-counter/session test coverage.
 
-    func testFailedVerificationRegeneratesModelAndClearsSelections() throws {
-        // `codeOnlySource` strips comment lines, so this locates the
-        // failure branch structurally (via the same `if`/`else` bounds
-        // `testMarkConfirmedIsOnlyCalledInsideSuccessfulValidateBranch`
-        // already establishes) rather than matching against comment text.
+    func testFailedVerificationClearsSelectionsWithoutRegeneratingTheModel() throws {
         let source = try codeOnlySource(of: "WalletBackupVerificationView.swift")
         let ifRange = try XCTUnwrap(source.range(of: "if model.validate(selections: selections) {"))
         let elseRange = try XCTUnwrap(source.range(of: "} else {", range: ifRange.upperBound..<source.endIndex))
-        let failureBranch = source[elseRange.lowerBound...]
+        let closingRange = try XCTUnwrap(source.range(of: "\n    }", range: elseRange.upperBound..<source.endIndex))
+        let failureBranch = source[elseRange.upperBound..<closingRange.lowerBound]
 
-        XCTAssertTrue(failureBranch.contains("regenerateModel()"))
-        XCTAssertTrue(failureBranch.contains("showError = true"))
-        XCTAssertTrue(source.contains("selections = [:]"), "regenerateModel must clear prior selections")
+        XCTAssertTrue(failureBranch.contains("selections = [:]"), "a wrong answer must clear selections directly")
+        XCTAssertFalse(
+            failureBranch.contains("regenerateModel()"),
+            "a wrong answer must NOT rebuild the model/questions — Stage 5E.9E3's final correction"
+        )
     }
 
     // MARK: - J: no secret enters Expo/TS

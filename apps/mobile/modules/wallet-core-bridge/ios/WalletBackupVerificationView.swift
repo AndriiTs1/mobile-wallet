@@ -46,6 +46,17 @@ struct WalletBackupVerificationView: View {
     /// dependency on, that continuation mechanism itself.
     let onVerified: () -> Void
 
+    /// Stage 5E.9E3 (final correction): called exactly once, only after
+    /// the third failed attempt within this verification session — never
+    /// after a successful verification. This is this screen's own
+    /// "return to the phrase screen" signal, wired by
+    /// `WalletBackupPhraseView` to set its local `isVerifying = false`
+    /// (the same mechanism already used for backgrounding/interruption) —
+    /// removing this view from the tree, which is what actually discards
+    /// its `selections`/`showError`/`failedAttempts` state. This view does
+    /// not persist, reset, or otherwise manage that teardown itself.
+    let onAttemptsExhausted: () -> Void
+
     /// The already-reconstructed mnemonic, received from
     /// `WalletBackupPhraseView` by reference (Swift `String` is
     /// copy-on-write) — not a second independently-allocated copy. Must
@@ -62,11 +73,25 @@ struct WalletBackupVerificationView: View {
     @State private var modelFailed = false
     @State private var selections: [Int: String] = [:]
     @State private var showError = false
+    /// Stage 5E.9E3 (final correction): in-memory only, never persisted
+    /// anywhere (no UserDefaults/Keychain/RN/backend) — this is a
+    /// backup-comprehension check, not an authentication lockout. Resets
+    /// to 0 implicitly whenever a fresh `WalletBackupVerificationView`
+    /// instance is created (a new verification session), since `@State`
+    /// initial values apply per-instance; there is no explicit reset call
+    /// anywhere in this file.
+    @State private var failedAttempts = 0
 
-    init(mnemonic: String, onVerificationSucceeded: @escaping () -> Void, onVerified: @escaping () -> Void) {
+    init(
+        mnemonic: String,
+        onVerificationSucceeded: @escaping () -> Void,
+        onVerified: @escaping () -> Void,
+        onAttemptsExhausted: @escaping () -> Void
+    ) {
         self.mnemonic = mnemonic
         self.onVerificationSucceeded = onVerificationSucceeded
         self.onVerified = onVerified
+        self.onAttemptsExhausted = onAttemptsExhausted
     }
 
     private var allQuestionsAnswered: Bool {
@@ -94,29 +119,77 @@ struct WalletBackupVerificationView: View {
             guard newValue else { return }
             // Explicit VoiceOver announcement — a newly-appearing Text
             // isn't guaranteed to receive automatic VoiceOver focus, so
-            // this ensures the failure message is actually announced, per
-            // this stage's own accessibility requirement.
-            UIAccessibility.post(notification: .announcement, argument: Self.genericFailureMessage)
+            // this ensures the failure message (including the attempt
+            // counter) is actually announced, per this stage's own
+            // accessibility requirement.
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: "\(Self.genericFailureTitle). \(Self.genericFailureBody) \(remainingAttemptsText)"
+            )
         }
     }
 
     // MARK: - Content
 
+    /// Stage 5E.9E3: physical-device QA found wrong-answer recovery
+    /// "looked" stuck. Root cause, found by tracing this file's actual
+    /// state transitions (not assumed): the state machinery itself was
+    /// already correct at the time — clearing `selections` and flipping
+    /// `showError` to `true` both worked. The real defect was visibility:
+    /// the error message was bare colored text with no container, and
+    /// this `ScrollView` had no scroll-to-visible mechanism at all — on a
+    /// real device, a user scrolled down near the original Verify button
+    /// would have the reset (cleared chips, the error text) happen *off
+    /// their current scroll position*, with nothing drawing their eye
+    /// back to it. The recovery was real; it was just invisible. Fixed
+    /// here with `ScrollViewReader` scrolling back to the top whenever
+    /// `showError` becomes true (see `.onChange` below), plus
+    /// `errorBanner`'s upgraded card treatment. (Separately, this stage
+    /// also changed *when* `showError` fires at all — see
+    /// `handleVerifyTapped`'s own doc comment for the final 3-attempts-
+    /// same-questions design; this scroll/visibility fix applies
+    /// regardless of that later correction.)
     private func content(model: WalletBackupVerificationModel) -> some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                header
-                VStack(spacing: 20) {
-                    ForEach(model.questions, id: \.position) { question in
-                        questionBlock(question: question)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 24) {
+                    header
+                    VStack(spacing: 20) {
+                        ForEach(model.questions, id: \.position) { question in
+                            questionBlock(question: question)
+                        }
+                    }
+                    if showError {
+                        errorBanner
+                    }
+                    VStack(spacing: 8) {
+                        verifyButton
+                        if !allQuestionsAnswered {
+                            // Always-visible (not VoiceOver-only) reason the
+                            // button is disabled — the Verify button's own
+                            // `.accessibilityHint` below covers VoiceOver;
+                            // sighted users get the same explanation here,
+                            // rather than a silently unresponsive button.
+                            Text("Select an answer for every word to continue.")
+                                .font(.system(size: 12))
+                                .foregroundColor(Palette.textSecondary)
+                                .multilineTextAlignment(.center)
+                        }
                     }
                 }
-                if showError {
-                    errorBanner
-                }
-                verifyButton
+                .padding(20)
+                .id(Self.contentTopAnchorID)
             }
-            .padding(20)
+            .onChange(of: showError) { newValue in
+                guard newValue else { return }
+                // Scrolls the freshly-regenerated questions, the cleared
+                // chips, and the now-visible error banner all back into
+                // view together — the concrete fix for the root cause
+                // documented above.
+                withAnimation {
+                    proxy.scrollTo(Self.contentTopAnchorID, anchor: .top)
+                }
+            }
         }
     }
 
@@ -206,12 +279,49 @@ struct WalletBackupVerificationView: View {
     }
 
     private var errorBanner: some View {
-        Text(Self.genericFailureMessage)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundColor(Palette.negative)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
-            .accessibilityAddTraits(.isStaticText)
+        // Stage 5E.9E3: bordered/tinted card — "clearly visible," not just
+        // technically present. Title/body/icon carry the meaning (not
+        // color alone); the attempt counter is deliberately muted
+        // secondary text, not red/punitive — this is a comprehension
+        // check, not a security lockout.
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(Palette.negative)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(Self.genericFailureTitle)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(Palette.negative)
+                Text(Self.genericFailureBody)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Palette.negative)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(remainingAttemptsText)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Palette.textSecondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(Palette.negative.opacity(0.12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Palette.negative.opacity(0.4), lineWidth: 1)
+        )
+        .cornerRadius(12)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// "2 attempts remaining" after the first failure, "1 attempt
+    /// remaining" (singular) after the second — never shown before any
+    /// failure, and never shown as "0 attempts remaining": the third
+    /// failure returns to the phrase screen instead of showing this at
+    /// all (see `handleVerifyTapped`).
+    private var remainingAttemptsText: String {
+        let remaining = Self.maxFailedAttempts - failedAttempts
+        return remaining == 1 ? "1 attempt remaining" : "\(remaining) attempts remaining"
     }
 
     private var verifyButton: some View {
@@ -231,6 +341,7 @@ struct WalletBackupVerificationView: View {
         .disabled(!allQuestionsAnswered)
         .opacity(allQuestionsAnswered ? 1 : 0.5)
         .accessibilityLabel("Verify")
+        .accessibilityHint(allQuestionsAnswered ? "" : "Select an answer for every word to continue")
     }
 
     private var modelFailureView: some View {
@@ -264,11 +375,19 @@ struct WalletBackupVerificationView: View {
 
     // MARK: - Actions
 
-    /// Builds (or rebuilds) `model` from `mnemonic` and clears any prior
-    /// selections. Used both for the initial load and — per this stage's
-    /// own "regenerate a fresh verification model / fresh positions" wrong-
-    /// answer requirement — after a failed verification attempt, so a
-    /// retry never reuses the same positions/choices the user just saw.
+    /// Builds `model` from `mnemonic` and clears any prior selections.
+    ///
+    /// Stage 5E.9E3 (final correction): this is now called ONLY when a
+    /// genuinely NEW verification session begins (`.onAppear`, i.e. a
+    /// fresh `WalletBackupVerificationView` instance after the user
+    /// returned to the phrase screen and pressed Continue again) or when
+    /// the user explicitly retries a rare model-construction failure via
+    /// `modelFailureView`'s "Try again" button. It is deliberately no
+    /// longer called on an ordinary wrong verification answer — per this
+    /// stage's own "same 3 questions across all 3 attempts" requirement,
+    /// see `handleVerifyTapped` below, which clears `selections` directly
+    /// instead without touching `model`/`questions` at all.
+    ///
     /// On the rare `WalletBackupVerificationModelError` (too few distinct
     /// alternative words, or an unexpected word count), routes to a
     /// generic native failure state — never silently marks backup
@@ -276,14 +395,6 @@ struct WalletBackupVerificationView: View {
     /// creates a wallet.
     private func regenerateModel() {
         selections = [:]
-        // Deliberately does NOT reset `showError` here — `handleVerifyTapped`
-        // calls this to rebuild fresh positions/choices immediately before
-        // setting `showError = true` on a failed attempt, and that
-        // assignment must be the one that actually sticks (and triggers
-        // the VoiceOver announcement below). `showError` is reset
-        // elsewhere instead: implicitly (its `@State` default is `false`)
-        // on first load, and explicitly the moment the user selects a new
-        // answer (see `choiceChip`).
         do {
             model = try WalletBackupVerificationModel(mnemonic: mnemonic)
             modelFailed = false
@@ -293,25 +404,52 @@ struct WalletBackupVerificationView: View {
         }
     }
 
+    /// Stage 5E.9E3 (final correction): a backup-comprehension check, not
+    /// an authentication lockout — exactly 3 failed attempts per session,
+    /// against the SAME 3 questions each time (never regenerated for
+    /// ordinary wrong answers, only for a genuinely new session — see
+    /// `regenerateModel`'s own doc comment). Never reveals which answer
+    /// was wrong, how many were wrong, or the correct word — every
+    /// selection is cleared uniformly regardless of which (if any) were
+    /// individually correct.
     private func handleVerifyTapped() {
         guard let model, allQuestionsAnswered else { return }
 
         if model.validate(selections: selections) {
             // Completion policy decided by the caller — see this file's
             // own header comment. Production marks confirmed; the
-            // DEV-only preview path does not.
+            // DEV-only preview path does not. Unchanged by this stage:
+            // success on attempt 1, 2, or 3 is treated identically.
             onVerificationSucceeded()
             onVerified()
         } else {
-            // Generic only — never reveals which position was wrong, never
-            // shows the correct word. Fresh positions/choices on retry;
-            // no lockout. Order matters: rebuild first, then flip
-            // `showError` last so it's the assignment SwiftUI actually
-            // observes (see `regenerateModel`'s own comment).
-            regenerateModel()
-            showError = true
+            failedAttempts += 1
+            selections = [:]
+
+            if failedAttempts >= Self.maxFailedAttempts {
+                // Third failure: no fourth attempt, no further challenge
+                // on this screen, no lockout, no timer — reset the count
+                // (nothing to persist across sessions) and hand off to
+                // the phrase screen. `backupConfirmed` is untouched either
+                // way; only `onVerificationSucceeded()` ever sets it, and
+                // that path was never reached this attempt.
+                failedAttempts = 0
+                showError = false
+                onAttemptsExhausted()
+            } else {
+                // Same 3 questions remain — only the error/counter and
+                // cleared selections change.
+                showError = true
+            }
         }
     }
 
-    private static let genericFailureMessage = "That's not quite right. Check your written copy and try again."
+    private static let genericFailureTitle = "Not quite right"
+    private static let genericFailureBody = "Check your written backup and try again."
+    /// Stage 5E.9E3 (final correction): exactly 3 attempts per session —
+    /// a backup-comprehension check, not a security lockout. See
+    /// `failedAttempts`'s own doc comment for why no persistence exists.
+    private static let maxFailedAttempts = 3
+    /// Stage 5E.9E3: `ScrollViewReader` anchor id — see `content(model:)`.
+    private static let contentTopAnchorID = "verification-content-top"
 }
