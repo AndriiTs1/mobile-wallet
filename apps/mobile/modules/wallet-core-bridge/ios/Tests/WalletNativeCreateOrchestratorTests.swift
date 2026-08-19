@@ -137,6 +137,69 @@ final class WalletNativeCreateOrchestratorTests: XCTestCase {
         XCTAssertTrue(source.contains("WalletSecureStorage.store(data:"))
     }
 
+    // MARK: - Stage 5D.8D: physical-device production E2E
+
+    /// The one test in this file that exercises the REAL production path —
+    /// `createAndPersist()` itself, not the `commitAndBuildPublicResult`
+    /// synthetic seam — driving the actual `dangerousNativeOnlyCreateWalletV1()`
+    /// FFI call, real OS-CSPRNG entropy, real V1 address derivation, and real
+    /// Secure-Enclave-backed Keychain persistence. Per ADR-005 §19, only a
+    /// physical device exercises genuine Secure Enclave behavior; this test
+    /// still compiles and runs on Simulator (where `SecureEnclave.isAvailable`
+    /// is also true), but its result is authoritative for hardware-backed
+    /// guarantees only when run on real hardware.
+    func testCreateAndPersistProductionPathRoundTripsOnRealHardware() throws {
+        try skipIfSecureEnclaveUnavailable()
+
+        // (1) Storage is empty before this test — enforced by setUpWithError.
+
+        // (2) The real production path: FFI create -> real entropy -> real
+        // addresses -> WalletSecureStorage.store(data:) -> public result.
+        let firstResult = try WalletNativeCreateOrchestrator.createAndPersist()
+
+        // (3) Non-empty.
+        XCTAssertFalse(firstResult.ethereum.isEmpty)
+        XCTAssertFalse(firstResult.bitcoinReceive.isEmpty)
+        XCTAssertFalse(firstResult.bitcoinChange.isEmpty)
+
+        // (4) Structurally plausible, using the same established formats the
+        // Rust test suite already asserts (packages/wallet-core/src/lib.rs:
+        // EIP-55 Ethereum address = "0x" + 40 hex chars = 42 total; bech32
+        // mainnet P2WPKH Bitcoin addresses = "bc1q" prefix; receive/change
+        // are distinct branches).
+        XCTAssertTrue(firstResult.ethereum.hasPrefix("0x"))
+        XCTAssertEqual(firstResult.ethereum.count, 42)
+        XCTAssertTrue(firstResult.bitcoinReceive.hasPrefix("bc1q"))
+        XCTAssertTrue(firstResult.bitcoinChange.hasPrefix("bc1q"))
+        XCTAssertNotEqual(firstResult.bitcoinReceive, firstResult.bitcoinChange)
+
+        // (5)/(6) Persisted canonical entropy is real, Keychain-backed
+        // storage, exactly 16 bytes (128-bit BIP-39 entropy, V1's 12-word
+        // create default per ADR-004 §3). Never printed/logged — only its
+        // byte count is asserted, and it is compared (never displayed) below.
+        // `Data`'s own description never renders raw bytes (Foundation
+        // prints only a byte count), so even an assertion-failure message
+        // here cannot leak the value into test output.
+        let firstPersistedEntropy = try WalletSecureStorage.read()
+        XCTAssertEqual(firstPersistedEntropy.count, 16)
+
+        // (8)/(9) A second real create call, without deleting storage, must
+        // fail closed on the existing fail-closed duplicate-store rejection
+        // — never overwrite, never delete-then-recreate.
+        XCTAssertThrowsError(try WalletNativeCreateOrchestrator.createAndPersist()) { error in
+            XCTAssertEqual(error as? WalletSecureStorageError, .itemAlreadyExists)
+        }
+
+        // (10) The original persisted entropy is untouched by the failed
+        // duplicate attempt.
+        let entropyAfterDuplicateAttempt = try WalletSecureStorage.read()
+        XCTAssertEqual(entropyAfterDuplicateAttempt, firstPersistedEntropy)
+
+        // (11) Cleanup is handled by `tearDownWithError`
+        // (`WalletSecureStorage.delete()`), consistent with every other test
+        // in this file.
+    }
+
     // MARK: - Helpers
 
     private func skipIfSecureEnclaveUnavailable() throws {
