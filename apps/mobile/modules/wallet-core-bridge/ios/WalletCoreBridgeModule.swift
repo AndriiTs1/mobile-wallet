@@ -52,6 +52,22 @@ public class WalletCoreBridgeModule: Module {
       WalletBackupConfirmationStore.isConfirmed()
     }
 
+    // Stage 5F.3: secret-free. Gated reveal entry point for Settings >
+    // Recovery & Backup — authenticates via native device-owner
+    // authentication (WalletBiometricAuthorizer, Face ID/Touch ID/passcode
+    // fallback) BEFORE any phrase reconstruction or presentation occurs.
+    // Takes no argument, resolves with no value; rejects with a generic,
+    // non-descriptive error on authentication failure/cancellation or any
+    // other failure — WalletBiometricAuthorizationError and
+    // WalletBackupPhrasePresentationError are both already small, closed,
+    // OS-detail-free error surfaces, so nothing further is wrapped here.
+    // presentBackupPhrase (above) remains completely unchanged and
+    // ungated — ProductionStartupGate's onboarding backupRequired resume
+    // flow still depends on calling that one directly.
+    AsyncFunction("requestRevealBackup") {
+      try await WalletBackupPhrasePresenter.presentGatedReveal()
+    }
+
     #if DEBUG
     // Stage 5E.9E2: DEV-ONLY. Compiled out entirely in Release builds —
     // this Function simply does not exist as an Expo-callable method

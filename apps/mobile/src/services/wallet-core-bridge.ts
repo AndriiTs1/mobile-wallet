@@ -16,6 +16,7 @@ type WalletCoreBridgeApi = {
   presentBackupPhrase(): Promise<void>;
   hasBackupConfirmed(): boolean;
   presentBackupPhrasePreview(): Promise<void>;
+  requestRevealBackup(): Promise<void>;
 };
 
 /**
@@ -114,4 +115,24 @@ export function presentBackupPhrasePreview(): Promise<void> {
     return Promise.reject(new Error('Native Wallet Core module unavailable in this runtime.'));
   }
   return bridge.presentBackupPhrasePreview();
+}
+
+/**
+ * Stage 5F.3 — requests the gated recovery-phrase reveal flow: native
+ * device-owner authentication (Face ID/Touch ID/passcode) must succeed
+ * before the phrase is ever reconstructed or presented — see
+ * `WalletBackupPhrasePresenter.presentGatedReveal()`'s own doc comment.
+ * Resolves with no value; rejects with a generic, non-descriptive error
+ * on authentication failure/cancellation or any other failure — never any
+ * secret, authentication state, or OS error detail. This is the only
+ * function Settings > Recovery & Backup should call; it must never call
+ * `presentBackupPhrase` directly (that one stays reserved for the
+ * ungated onboarding resume flow).
+ */
+export function requestRevealBackup(): Promise<void> {
+  const bridge = loadWalletCoreBridge();
+  if (!bridge) {
+    return Promise.reject(new Error('Native Wallet Core module unavailable in this runtime.'));
+  }
+  return bridge.requestRevealBackup();
 }

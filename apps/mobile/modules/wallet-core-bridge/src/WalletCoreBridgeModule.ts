@@ -24,6 +24,17 @@ declare class WalletCoreBridgeModule extends NativeModule<{}> {
   // corresponding mutation function is exposed here or anywhere else in
   // this module; only native code may ever set the underlying flag true.
   hasBackupConfirmed(): boolean;
+  // Stage 5F.3: secret-free. Gated reveal entry point for Settings >
+  // Recovery & Backup — native device-owner authentication (Face ID/
+  // Touch ID/passcode fallback) must succeed BEFORE the recovery phrase
+  // is ever reconstructed or presented. Takes no argument, resolves with
+  // no value; rejects with a generic, non-descriptive error on
+  // authentication failure/cancellation or any other failure. No secret,
+  // and no authentication result/token, ever crosses this boundary in
+  // either direction. presentBackupPhrase (above) remains unchanged and
+  // ungated — it is still the only thing the onboarding backupRequired
+  // resume flow calls.
+  requestRevealBackup(): Promise<void>;
   // Stage 5E.9E2: DEV-ONLY. Only exists as a callable native method in
   // DEBUG builds (the underlying Swift Function is compiled out entirely
   // in Release — see WalletCoreBridgeModule.swift) — RN must only ever

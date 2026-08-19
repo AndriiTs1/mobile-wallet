@@ -56,6 +56,37 @@ enum WalletBackupPhrasePresenter {
         })
     }
 
+    /// Stage 5F.3 — gated reveal entry point for Settings > Recovery &
+    /// Backup. Authenticates via `WalletBiometricAuthorizer` FIRST, and
+    /// only calls `present()` — the exact same production entry point,
+    /// same `presentFlow`, same `markConfirmed()` completion policy — on
+    /// success. If `authorize(reason:)` throws (cancellation, failure,
+    /// unavailability — see its own doc comment), this function's `try`
+    /// propagates immediately and `present()` is never reached: no
+    /// `WalletBackupPhraseView` is constructed, so no mnemonic
+    /// reconstruction (`WalletBackupPhraseViewModel.loadPhrase()`, fired
+    /// from that view's own `.onAppear`) can occur either — authentication
+    /// gates the entire presentation pipeline, not just what's visually
+    /// shown once it's already running.
+    ///
+    /// Deliberately reuses `present()` rather than a new `presentFlow`
+    /// completion-policy variant: this is a reveal of an already-backed-up
+    /// wallet (Settings is unreachable before onboarding completes), so
+    /// `backupConfirmed` is already `true` by the time a user can reach
+    /// this call site — re-calling `markConfirmed()` here is idempotent
+    /// and requires no new policy branch.
+    ///
+    /// `presentBackupPhrase()`/`present()` above is deliberately NEVER
+    /// routed through this gate — `ProductionStartupGate`'s onboarding
+    /// `backupRequired` resume flow depends on it staying ungated, since a
+    /// user resuming interrupted initial backup may not have biometrics
+    /// configured yet; gating it would risk an onboarding deadlock.
+    @MainActor
+    static func presentGatedReveal() async throws {
+        try await WalletBiometricAuthorizer.authorize(reason: "Authenticate to view your recovery phrase.")
+        try await present()
+    }
+
     #if DEBUG
     /// Stage 5E.9E2 — DEV-ONLY preview entry point. Exists only in DEBUG
     /// builds (compiled out entirely in Release, per this stage's own

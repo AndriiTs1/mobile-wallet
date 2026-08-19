@@ -4,29 +4,28 @@ import { ScreenHeader } from '@/components/screen-header';
 import { ScreenScaffold } from '@/components/screen-scaffold';
 import { SettingsCard, SettingsRow } from '@/components/settings-row';
 import { Spacing } from '@/constants/theme';
-import { presentBackupPhrase } from '@/services/wallet-core-bridge';
+import { requestRevealBackup } from '@/services/wallet-core-bridge';
 
 export default function SecuritySettingsScreen() {
-  // Stage 5E.7C — TEMPORARY QA-only wiring. Presents the existing native
-  // backup-phrase screen for the wallet that already exists on this
-  // device, purely so it can be visually inspected on a physical iPhone.
-  // This is NOT the real Recovery & Backup reveal flow: there is no Face
-  // ID/device-authentication gate, no backupConfirmed tracking, and no
-  // "why am I being shown this" framing — it will be replaced by the real,
-  // gated reveal flow in a later stage. `presentBackupPhrase()` is the
-  // same secret-free Expo function onboarding already uses (Stage 5E.4):
-  // it takes no argument, resolves with no value, and no wallet secret
-  // ever crosses into RN/JS — WalletBackupPhraseView reconstructs and
-  // renders it entirely natively. This handler never calls any wallet
-  // create/persist/delete API, so it cannot create a second wallet or
-  // touch the existing one's stored data.
+  // Stage 5F.3 — the real, gated Recovery & Backup reveal flow. Native
+  // device-owner authentication (Face ID/Touch ID/passcode fallback) must
+  // succeed BEFORE the recovery phrase is ever reconstructed or presented
+  // — see `WalletBackupPhrasePresenter.presentGatedReveal()`'s own doc
+  // comment. `requestRevealBackup()` takes no argument and resolves with
+  // no value; no wallet secret, and no authentication result/token, ever
+  // crosses into RN/JS in either direction. This handler never calls any
+  // wallet create/persist/delete API, so it cannot create a second wallet
+  // or touch the existing one's stored data.
   const handleRecoveryAndBackupPress = async () => {
     try {
-      await presentBackupPhrase();
+      await requestRevealBackup();
     } catch {
       // Generic, UI-safe only — never logs or surfaces the caught error's
-      // internal detail. Temporary QA wiring has no error UI of its own;
-      // a silent no-op on failure is acceptable for this stage.
+      // internal detail (which itself never carries OS/authentication
+      // detail to begin with — see the native authorizer's own error
+      // boundary). Cancelling or failing authentication simply leaves the
+      // user on this screen with no visible change, which is the correct,
+      // safe outcome — there is nothing to navigate away from or clean up.
     }
   };
 
