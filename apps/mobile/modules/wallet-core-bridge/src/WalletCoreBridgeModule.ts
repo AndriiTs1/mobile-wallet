@@ -35,6 +35,18 @@ declare class WalletCoreBridgeModule extends NativeModule<{}> {
   // ungated — it is still the only thing the onboarding backupRequired
   // resume flow calls.
   requestRevealBackup(): Promise<void>;
+  // Stage 5F.4A: secret-free. App Lock authorization bridge foundation —
+  // not wired into any UI/lifecycle yet. Native device-owner
+  // authentication (Face ID/Touch ID/passcode fallback). Takes no
+  // argument, resolves with no value; rejects with a generic,
+  // non-descriptive error on authentication failure/cancellation/
+  // unavailability. No boolean, token, or OS error detail ever crosses
+  // this boundary. This authorization is ONLY for application UI access
+  // — it must never be treated as authorization for recovery-phrase
+  // reveal (requestRevealBackup above) or future transaction signing;
+  // each of those independently performs its own fresh native
+  // authentication regardless of this call's outcome.
+  requestAppUnlock(): Promise<void>;
   // Stage 5E.9E2: DEV-ONLY. Only exists as a callable native method in
   // DEBUG builds (the underlying Swift Function is compiled out entirely
   // in Release — see WalletCoreBridgeModule.swift) — RN must only ever

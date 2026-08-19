@@ -17,6 +17,7 @@ type WalletCoreBridgeApi = {
   hasBackupConfirmed(): boolean;
   presentBackupPhrasePreview(): Promise<void>;
   requestRevealBackup(): Promise<void>;
+  requestAppUnlock(): Promise<void>;
 };
 
 /**
@@ -135,4 +136,28 @@ export function requestRevealBackup(): Promise<void> {
     return Promise.reject(new Error('Native Wallet Core module unavailable in this runtime.'));
   }
   return bridge.requestRevealBackup();
+}
+
+/**
+ * Stage 5F.4A — App Lock authorization bridge foundation. Not wired into
+ * any UI/lifecycle yet — no caller exists in this stage. Requests native
+ * device-owner authentication (Face ID/Touch ID/passcode fallback) for
+ * application UI access only. Resolves with no value; rejects with a
+ * generic, non-descriptive error on authentication failure/cancellation/
+ * unavailability. No wallet secret, boolean, token, or OS error detail
+ * ever crosses this boundary. No UI state or authentication state is
+ * stored here or anywhere in this file.
+ *
+ * This authorization is ONLY for application UI access — it must never be
+ * treated as, or substituted for, authorization of recovery-phrase reveal
+ * (`requestRevealBackup`) or future transaction signing; each of those
+ * independently performs its own fresh native authentication regardless
+ * of this call's outcome.
+ */
+export function requestAppUnlock(): Promise<void> {
+  const bridge = loadWalletCoreBridge();
+  if (!bridge) {
+    return Promise.reject(new Error('Native Wallet Core module unavailable in this runtime.'));
+  }
+  return bridge.requestAppUnlock();
 }

@@ -251,18 +251,53 @@ final class WalletBiometricAuthorizerTests: XCTestCase {
         }
     }
 
-    func testWalletCoreBridgeModuleDoesNotReferenceTheAuthorizer() throws {
+    /// Stage 5F.2 asserted this file never referenced
+    /// `WalletBiometricAuthorizer`/"Biometric" at all — correct for that
+    /// foundation-only stage, where nothing in production called it yet.
+    /// Stage 5F.4A intentionally supersedes that: `requestAppUnlock` is the
+    /// one approved direct production bridge use (its own delegation shape
+    /// is already covered in detail by `WalletAppUnlockBridgeTests`, so
+    /// this test only re-expresses the still-valid part of the old
+    /// invariant — no broader biometric API/token/state surface exists
+    /// than that single, isolated call, and recovery reveal stays on its
+    /// own independent path).
+    func testAuthorizerIsOnlyReferencedFromTheApprovedAppUnlockPath() throws {
         let source = try codeOnlySource(of: "WalletCoreBridgeModule.swift")
-        XCTAssertFalse(source.contains("WalletBiometricAuthorizer"))
-        XCTAssertFalse(source.contains("Biometric"))
-        XCTAssertFalse(source.contains("FaceID"))
+
+        let occurrences = source.components(separatedBy: "WalletBiometricAuthorizer").count - 1
+        XCTAssertEqual(occurrences, 1, "WalletBiometricAuthorizer must be referenced exactly once in this file")
+
+        let functionStart = try XCTUnwrap(source.range(of: "AsyncFunction(\"requestAppUnlock\") {"))
+        let functionEnd = try XCTUnwrap(source.range(of: "\n    }", range: functionStart.upperBound..<source.endIndex))
+        let body = source[functionStart.upperBound..<functionEnd.lowerBound]
+        XCTAssertTrue(body.contains("WalletBiometricAuthorizer"), "the sole reference must live inside requestAppUnlock")
+
+        // No broader biometric API/token/state surface than that one call.
+        for term in ["LAContext", "LAPolicy", "biometryType", "authToken", "biometricToken", "authState", "isAuthenticated"] {
+            XCTAssertFalse(source.contains(term), "WalletCoreBridgeModule.swift must not expose \(term)")
+        }
+
+        // Recovery reveal remains on its own independent path — not
+        // routed through this call.
+        XCTAssertTrue(source.contains("try await WalletBackupPhrasePresenter.presentGatedReveal()"))
+        XCTAssertFalse(body.contains("WalletBackupPhrasePresenter"))
     }
 
-    func testWalletCoreBridgeModuleTypeScriptDoesNotReferenceBiometrics() throws {
+    /// Stage 5F.2 asserted this file never referenced biometric/auth
+    /// concepts at all — correct before any biometric-gated capability was
+    /// exposed to RN. Stage 5F.4A adds exactly one:
+    /// `requestAppUnlock(): Promise<void>`. This re-expresses the
+    /// still-valid part of the old invariant — no broader biometric API/
+    /// token/state (no policy type, no OS context, no token/state result)
+    /// crosses into the TypeScript contract than that one
+    /// Promise<void>-shaped declaration.
+    func testWalletCoreBridgeModuleTypeScriptExposesNoBroaderBiometricSurfaceThanAppUnlock() throws {
         let source = try codeOnlySource(of: "WalletCoreBridgeModule.ts", subdirectory: "src")
-        XCTAssertFalse(source.contains("Biometric"))
-        XCTAssertFalse(source.contains("FaceID"))
-        XCTAssertFalse(source.contains("authorize"))
+        XCTAssertTrue(source.contains("requestAppUnlock(): Promise<void>;"), "the one approved biometric-gated declaration must still be present")
+
+        for term in ["LAPolicy", "LAContext", "biometryType", "authToken", "authState"] {
+            XCTAssertFalse(source.contains(term), "WalletCoreBridgeModule.ts must not expose \(term)")
+        }
     }
 
     // MARK: - 15: no DEBUG authentication bypass exists

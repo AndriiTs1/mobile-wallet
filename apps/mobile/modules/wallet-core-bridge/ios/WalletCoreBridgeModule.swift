@@ -68,6 +68,29 @@ public class WalletCoreBridgeModule: Module {
       try await WalletBackupPhrasePresenter.presentGatedReveal()
     }
 
+    // Stage 5F.4A: secret-free. App Lock authorization bridge foundation —
+    // NOT wired into any UI/lifecycle yet (no presenter, no App Lock
+    // screen exists in this stage). Reuses WalletBiometricAuthorizer
+    // exactly as-is: fresh .deviceOwnerAuthentication evaluation, no
+    // caching, no persistence. Takes no argument, resolves with no value;
+    // rejects with a generic, non-descriptive error on authentication
+    // failure/cancellation/unavailability — WalletBiometricAuthorizationError
+    // is already a small, closed, OS-detail-free error surface, so nothing
+    // further is wrapped here.
+    //
+    // SECURITY: this authorization is ONLY for application UI access
+    // (i.e., whether the app's screens should be visible at all). It MUST
+    // NOT be treated as, cached as, or substituted for authorization of
+    // recovery-phrase reveal or future transaction signing — those remain
+    // entirely independent, each performing its own fresh native
+    // authentication (requestRevealBackup above already does; future
+    // signing must too). Nothing in this function's return value (a bare
+    // Void) or in WalletBiometricAuthorizer itself provides any mechanism
+    // to reuse this specific authorization for a different operation.
+    AsyncFunction("requestAppUnlock") {
+      try await WalletBiometricAuthorizer.authorize(reason: "Unlock Mobile Wallet")
+    }
+
     #if DEBUG
     // Stage 5E.9E2: DEV-ONLY. Compiled out entirely in Release builds —
     // this Function simply does not exist as an Expo-callable method
