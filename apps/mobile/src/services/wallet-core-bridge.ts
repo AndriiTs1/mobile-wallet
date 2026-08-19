@@ -13,6 +13,7 @@
 type WalletCoreBridgeApi = {
   hasWallet(): boolean;
   createWalletAndPresentBackup(): Promise<void>;
+  presentBackupPhrase(): Promise<void>;
 };
 
 /**
@@ -62,4 +63,18 @@ export function createWalletAndPresentBackup(): Promise<void> {
     return Promise.reject(new Error('Native Wallet Core module unavailable in this runtime.'));
   }
   return bridge.createWalletAndPresentBackup();
+}
+
+/**
+ * Presents the native backup-phrase screen for the wallet that already
+ * exists — never creates, deletes, or otherwise modifies any wallet state.
+ * Resolves with no value; rejects with a generic, non-descriptive error on
+ * any failure.
+ */
+export function presentBackupPhrase(): Promise<void> {
+  const bridge = loadWalletCoreBridge();
+  if (!bridge) {
+    return Promise.reject(new Error('Native Wallet Core module unavailable in this runtime.'));
+  }
+  return bridge.presentBackupPhrase();
 }

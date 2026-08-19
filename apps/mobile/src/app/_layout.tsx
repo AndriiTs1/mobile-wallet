@@ -8,13 +8,29 @@ import AppTabs from '@/components/app-tabs';
 import { CreateWalletScreen } from '@/components/create-wallet-screen';
 import { Colors } from '@/constants/theme';
 import { MarketDataProvider } from '@/providers/market-data-provider';
-import { createWalletAndPresentBackup, hasWallet } from '@/services/wallet-core-bridge';
+import {
+  createWalletAndPresentBackup,
+  hasWallet,
+  presentBackupPhrase,
+} from '@/services/wallet-core-bridge';
 
 SplashScreen.preventAutoHideAsync();
 
 const palette = Colors.dark;
 
 const GENERIC_CREATE_ERROR = 'Something went wrong creating your wallet. Please try again.';
+
+/**
+ * Stage 5E.7D — DEVELOPMENT-ONLY "Showcase Mode". Lets designers/developers
+ * repeatedly preview the Create Wallet -> Backup Phrase screen during
+ * active development, even on a device that already has a real wallet —
+ * the existing wallet is never recreated (see `ShowcaseCreateWalletGate`'s
+ * safety check below). Production startup routing (`ProductionStartupGate`,
+ * unmodified from Stage 5E.6/5E.6B) remains entirely wallet-state-driven
+ * and is the only path taken in a release build, since `__DEV__` is a
+ * build-time constant that is always `false` there.
+ */
+const DEVELOPMENT_SHOWCASE_MODE = __DEV__;
 
 /**
  * Stage 5E.6 — temporary startup gate. `hasWallet()` is a structural
@@ -34,6 +50,26 @@ type StartupState =
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
+
+  return (
+    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+      <MarketDataProvider>
+        <AnimatedSplashOverlay />
+        {DEVELOPMENT_SHOWCASE_MODE ? <ShowcaseCreateWalletGate /> : <ProductionStartupGate />}
+      </MarketDataProvider>
+    </ThemeProvider>
+  );
+}
+
+/**
+ * Unchanged production startup routing (Stage 5E.6/5E.6B): `hasWallet()`
+ * decides noWallet vs. walletExists at launch; a real create/persist call
+ * is the only path to walletExists; failure re-checks `hasWallet()` to
+ * avoid the partial-success trap (persistence may have succeeded even
+ * though backup-screen presentation then failed). Never reached when
+ * Showcase Mode is active.
+ */
+function ProductionStartupGate() {
   const [state, setState] = useState<StartupState>({ status: 'checking' });
 
   const refreshHasWallet = useCallback(() => {
@@ -84,30 +120,80 @@ export default function TabLayout() {
     }
   }, [refreshHasWallet]);
 
+  if (state.status === 'walletExists') {
+    return <AppTabs />;
+  }
+  if (state.status === 'checking') {
+    return <View style={styles.checkingContainer} />;
+  }
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <MarketDataProvider>
-        <AnimatedSplashOverlay />
-        {state.status === 'walletExists' ? (
-          <AppTabs />
-        ) : state.status === 'checking' ? (
-          <View style={styles.checkingContainer} />
-        ) : (
-          <CreateWalletScreen
-            isCreating={state.status === 'creating'}
-            errorMessage={state.status === 'error' ? state.message : null}
-            onCreate={handleCreate}
-          />
-        )}
-      </MarketDataProvider>
-    </ThemeProvider>
+    <CreateWalletScreen
+      isCreating={state.status === 'creating'}
+      errorMessage={state.status === 'error' ? state.message : null}
+      onCreate={handleCreate}
+    />
+  );
+}
+
+type ShowcaseState = {
+  isCreating: boolean;
+  errorMessage: string | null;
+};
+
+/**
+ * Stage 5E.7D — DEVELOPMENT-ONLY. Always renders the real
+ * `CreateWalletScreen`, regardless of `hasWallet()`, and never transitions
+ * to Home — dismissing the native backup screen simply returns here, so
+ * Create Wallet -> Backup Phrase -> Create Wallet can be inspected
+ * repeatedly during development. Pressing the button branches on
+ * `hasWallet()` to pick a safe native action — see the safety comment
+ * inside `handleShowcaseCreate`.
+ */
+function ShowcaseCreateWalletGate() {
+  const [state, setState] = useState<ShowcaseState>({ isCreating: false, errorMessage: null });
+
+  const handleShowcaseCreate = useCallback(async () => {
+    setState((current) =>
+      current.isCreating ? current : { isCreating: true, errorMessage: null },
+    );
+
+    try {
+      // CRITICAL SAFETY CHECK — must run before any create call. If a real
+      // wallet already exists, createWalletAndPresentBackup() must never
+      // be called against it: this branch exists specifically so Showcase
+      // Mode never even attempts that call against an existing wallet.
+      // Instead, reveal the existing wallet's own already-persisted
+      // phrase via the same secret-free presentation call onboarding uses.
+      if (hasWallet()) {
+        await presentBackupPhrase();
+      } else {
+        // No wallet yet on this dev device — exercise the real, genuine
+        // create/persist/backup-present flow, unmodified.
+        await createWalletAndPresentBackup();
+      }
+      setState({ isCreating: false, errorMessage: null });
+    } catch {
+      // Generic only, same treatment as production — never the caught
+      // error's internal detail.
+      setState({ isCreating: false, errorMessage: GENERIC_CREATE_ERROR });
+    }
+  }, []);
+
+  return (
+    <CreateWalletScreen
+      isCreating={state.isCreating}
+      errorMessage={state.errorMessage}
+      onCreate={handleShowcaseCreate}
+    />
   );
 }
 
 const styles = StyleSheet.create({
   // Brief, splash-covered placeholder while the initial hasWallet() check
   // resolves — avoids flashing the Create Wallet CTA for a user who
-  // already has a wallet.
+  // already has a wallet. Production path only; Showcase Mode has no
+  // equivalent "checking" phase since it never consults hasWallet() until
+  // the button is pressed.
   checkingContainer: {
     flex: 1,
     backgroundColor: palette.background,

@@ -18,7 +18,6 @@ type TrustRowItem = {
   symbol: SFSymbol;
   fallbackGlyph: string;
   title: string;
-  description: string;
 };
 
 const TRUST_ROWS: TrustRowItem[] = [
@@ -26,19 +25,16 @@ const TRUST_ROWS: TrustRowItem[] = [
     symbol: 'lock.shield',
     fallbackGlyph: '✓',
     title: 'Protected on your device',
-    description: 'Your private keys never leave your device.',
   },
   {
     symbol: 'hand.raised.fill',
     fallbackGlyph: '✓',
     title: 'Only you have access',
-    description: 'No one — including us — can access your wallet.',
   },
   {
     symbol: 'arrow.triangle.2.circlepath',
     fallbackGlyph: '✓',
     title: 'Always recoverable',
-    description: 'Restore your wallet with your recovery phrase.',
   },
 ];
 
@@ -102,11 +98,7 @@ export function CreateWalletScreen({ isCreating, errorMessage, onCreate }: Creat
 
         <View style={styles.trustList}>
           {TRUST_ROWS.map((row) => (
-            <View
-              key={row.title}
-              style={styles.trustRow}
-              accessible
-              accessibilityLabel={`${row.title}. ${row.description}`}>
+            <View key={row.title} style={styles.trustRow} accessible accessibilityLabel={row.title}>
               <View style={styles.trustIconWrap}>
                 <SymbolView
                   name={{ ios: row.symbol }}
@@ -115,10 +107,7 @@ export function CreateWalletScreen({ isCreating, errorMessage, onCreate }: Creat
                   fallback={<Text style={styles.trustIconFallback}>{row.fallbackGlyph}</Text>}
                 />
               </View>
-              <View style={styles.trustText}>
-                <Text style={styles.trustTitle}>{row.title}</Text>
-                <Text style={styles.trustDescription}>{row.description}</Text>
-              </View>
+              <Text style={styles.trustTitle}>{row.title}</Text>
             </View>
           ))}
         </View>
@@ -127,8 +116,6 @@ export function CreateWalletScreen({ isCreating, errorMessage, onCreate }: Creat
       <View style={styles.spacer} />
 
       <View style={styles.actionBlock}>
-        <Text style={styles.trustLine}>No email · No password · No personal data</Text>
-
         {showError ? (
           <View
             style={styles.errorPanel}
@@ -155,8 +142,6 @@ export function CreateWalletScreen({ isCreating, errorMessage, onCreate }: Creat
             <Text style={styles.createButtonLabel}>{isCreating ? 'Creating…' : 'Create Wallet'}</Text>
           </View>
         </Pressable>
-
-        <Text style={styles.helperText}>Next, securely back up your 12-word recovery phrase.</Text>
       </View>
     </ScrollView>
   );
@@ -204,13 +189,18 @@ const styles = StyleSheet.create({
   trustList: {
     width: '100%',
     gap: Spacing.two,
+    marginTop: -10,
   },
   trustRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: Spacing.three,
+    position: 'relative',
+    minHeight: 32,
+    justifyContent: 'center',
   },
   trustIconWrap: {
+    position: 'absolute',
+    left: 0,
+    top: '50%',
+    marginTop: -16,
     width: 32,
     height: 32,
     borderRadius: 10,
@@ -223,19 +213,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
   },
-  trustText: {
-    flex: 1,
-    gap: 2,
-  },
   trustTitle: {
+    width: '100%',
     color: palette.text,
+    opacity: 0.85,
     fontSize: 14,
     fontWeight: '600',
-  },
-  trustDescription: {
-    color: palette.textSecondary,
-    fontSize: 13,
     lineHeight: 18,
+    textAlign: 'center',
   },
   spacer: {
     flex: 1,
@@ -244,13 +229,6 @@ const styles = StyleSheet.create({
   actionBlock: {
     width: '100%',
     gap: Spacing.two,
-  },
-  trustLine: {
-    color: palette.textSecondary,
-    fontSize: 11,
-    fontWeight: '500',
-    textAlign: 'center',
-    marginBottom: Spacing.one,
   },
   errorPanel: {
     backgroundColor: palette.backgroundElement,
@@ -290,10 +268,5 @@ const styles = StyleSheet.create({
     color: palette.background,
     fontSize: 16,
     fontWeight: '700',
-  },
-  helperText: {
-    color: palette.textSecondary,
-    fontSize: 12,
-    textAlign: 'center',
   },
 });
