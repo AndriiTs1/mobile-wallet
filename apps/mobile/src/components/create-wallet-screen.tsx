@@ -1,5 +1,6 @@
 import { SymbolView, type SFSymbol } from 'expo-symbols';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShieldMark } from '@/components/shield-mark';
@@ -22,10 +23,10 @@ type TrustRowItem = {
 
 const TRUST_ROWS: TrustRowItem[] = [
   {
-    symbol: 'lock.iphone',
+    symbol: 'lock.shield',
     fallbackGlyph: '✓',
     title: 'Protected on your device',
-    description: 'Your private keys stay securely on this iPhone.',
+    description: 'Your private keys never leave your device.',
   },
   {
     symbol: 'hand.raised.fill',
@@ -36,34 +37,66 @@ const TRUST_ROWS: TrustRowItem[] = [
   {
     symbol: 'arrow.triangle.2.circlepath',
     fallbackGlyph: '✓',
-    title: 'Recoverable by you',
-    description: 'Restore your wallet using your recovery phrase.',
+    title: 'Always recoverable',
+    description: 'Restore your wallet with your recovery phrase.',
   },
 ];
 
 /**
- * Stage 5E.6A — premium polish pass over the Stage 5E.6 first-run screen.
- * Purely presentational: the props contract with `_layout.tsx`
- * (isCreating/errorMessage/onCreate) is unchanged, so the existing
- * checking/noWallet/creating/walletExists/error state machine — including
- * its partial-success handling — is untouched by this stage.
+ * Stage 5E.6B — final cross-platform polish pass over the Stage 5E.6/5E.6A
+ * first-run screen. Purely presentational: the props contract with
+ * `_layout.tsx` (isCreating/errorMessage/onCreate) is unchanged, so the
+ * existing checking/noWallet/creating/walletExists/error state machine —
+ * including its partial-success handling — is untouched by this stage.
+ *
+ * Device-neutral throughout: no user-facing copy names any specific
+ * platform, vendor, or hardware security mechanism, no `Platform.OS`
+ * branching of copy, and no device-model checks. Iconography uses `expo-symbols`'
+ * own cross-platform-aware `name`/`fallback` API (already the established
+ * pattern elsewhere in this app) rather than any platform check written
+ * here — on a platform/OS version where the named symbol isn't available,
+ * `SymbolView` itself renders the provided text-glyph `fallback`.
  */
 export function CreateWalletScreen({ isCreating, errorMessage, onCreate }: CreateWalletScreenProps) {
   const insets = useSafeAreaInsets();
 
+  // Local, presentation-only UI state — not part of `_layout.tsx`'s state
+  // machine. Fixes a real bug: `_layout.tsx`'s initial startup check
+  // (`refreshHasWallet()`, run once on mount before any create attempt)
+  // can itself land in the same `'error'` state a failed *create* attempt
+  // produces (e.g. if the initial existence check throws for any reason),
+  // and both are passed down through the identical `errorMessage` prop —
+  // this component has no way to tell them apart from the prop alone.
+  // Gating the error panel on "has the user actually pressed Create in
+  // this screen's lifetime" is a purely local, presentational fix: it
+  // never touches `_layout.tsx`'s transitions, and it doesn't affect the
+  // existing partial-success rule at all (when create rejects but
+  // `hasWallet()` becomes true, `_layout.tsx` transitions straight to
+  // `walletExists` and this screen unmounts before any error could render,
+  // exactly as before).
+  const [hasAttemptedCreate, setHasAttemptedCreate] = useState(false);
+  const showError = hasAttemptedCreate && errorMessage !== null;
+
+  const handleCreate = () => {
+    setHasAttemptedCreate(true);
+    onCreate();
+  };
+
   return (
-    <View
-      style={[
-        styles.container,
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={[
+        styles.scrollContent,
         { paddingTop: insets.top + Spacing.four, paddingBottom: insets.bottom + Spacing.two },
-      ]}>
+      ]}
+      showsVerticalScrollIndicator={false}>
       <View style={styles.content}>
         <View style={styles.heroBlock}>
-          <ShieldMark size={56} />
+          <ShieldMark size={44} />
           <Text style={styles.productName}>Mobile Wallet</Text>
           <Text style={styles.heroStatement}>Your money. Your keys.</Text>
           <Text style={styles.heroDescription}>
-            A secure self-custody wallet that puts you in control.
+            {'A secure self-custody wallet.\nYou stay in control.'}
           </Text>
         </View>
 
@@ -94,10 +127,14 @@ export function CreateWalletScreen({ isCreating, errorMessage, onCreate }: Creat
       <View style={styles.spacer} />
 
       <View style={styles.actionBlock}>
-        <Text style={styles.trustLine}>No email · No password · No personal data required</Text>
+        <Text style={styles.trustLine}>No email · No password · No personal data</Text>
 
-        {errorMessage ? (
-          <View style={styles.errorPanel} accessible accessibilityRole="alert" accessibilityLabel={errorMessage}>
+        {showError ? (
+          <View
+            style={styles.errorPanel}
+            accessible
+            accessibilityRole="alert"
+            accessibilityLabel={errorMessage ?? undefined}>
             <Text style={styles.errorTitle}>We couldn’t complete wallet creation.</Text>
             <Text style={styles.errorSubtitle}>Please try again.</Text>
           </View>
@@ -108,7 +145,7 @@ export function CreateWalletScreen({ isCreating, errorMessage, onCreate }: Creat
           accessibilityLabel="Create Wallet"
           accessibilityState={{ disabled: isCreating, busy: isCreating }}
           disabled={isCreating}
-          onPress={onCreate}
+          onPress={handleCreate}
           style={({ pressed }) => [
             styles.createButton,
             (pressed || isCreating) && styles.createButtonPressed,
@@ -119,38 +156,40 @@ export function CreateWalletScreen({ isCreating, errorMessage, onCreate }: Creat
           </View>
         </Pressable>
 
-        <Text style={styles.helperText}>
-          Next, you’ll securely back up your 12-word recovery phrase.
-        </Text>
+        <Text style={styles.helperText}>Next, securely back up your 12-word recovery phrase.</Text>
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  scroll: {
     flex: 1,
     backgroundColor: palette.background,
+  },
+  scrollContent: {
+    flexGrow: 1,
     paddingHorizontal: Spacing.four,
   },
   content: {
     alignItems: 'center',
-    gap: Spacing.five,
+    gap: Spacing.four,
   },
   heroBlock: {
     alignItems: 'center',
     gap: Spacing.two,
   },
   productName: {
-    color: palette.text,
-    fontSize: 20,
+    color: palette.textSecondary,
+    fontSize: 13,
     fontWeight: '600',
-    letterSpacing: -0.2,
-    marginTop: Spacing.two,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginTop: Spacing.one,
   },
   heroStatement: {
     color: palette.text,
-    fontSize: 26,
+    fontSize: 27,
     fontWeight: '700',
     letterSpacing: -0.5,
     textAlign: 'center',
@@ -164,7 +203,7 @@ const styles = StyleSheet.create({
   },
   trustList: {
     width: '100%',
-    gap: Spacing.three,
+    gap: Spacing.two,
   },
   trustRow: {
     flexDirection: 'row',
