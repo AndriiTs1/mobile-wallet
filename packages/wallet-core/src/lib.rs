@@ -283,7 +283,7 @@ mod wallet_secret {
     }
 
     impl CanonicalEntropy {
-        fn from_generated_16(entropy: Zeroizing<[u8; 16]>) -> Self {
+        pub(crate) fn from_generated_16(entropy: Zeroizing<[u8; 16]>) -> Self {
             let mut bytes = [0u8; 33];
             bytes[..16].copy_from_slice(&entropy[..]);
             Self {
@@ -367,6 +367,141 @@ mod wallet_secret {
             entropy: CanonicalEntropy::from_raw_33(entropy_bytes, len),
             addresses,
         })
+    }
+}
+
+/// Native-only UniFFI FFI surface, Stage 5D.8B.
+///
+/// Everything here is reachable from Swift/Kotlin (UniFFI exports must be
+/// `pub`), but NONE of it is safe to expose through Expo
+/// `Function(...)`/`AsyncFunction(...)` to React Native — see the
+/// `dangerous_native_only_*` naming convention below and the automated
+/// exposure guard at `apps/mobile/modules/wallet-core-bridge/check-no-dangerous-symbols-in-bridge.sh`.
+///
+/// Trust-boundary invariant (unchanged from every prior stage): seed,
+/// `Xpriv`, and secp256k1 private-key material never cross this boundary,
+/// or any boundary, at all — nothing in this module touches them. Only
+/// entropy and the mnemonic sentence cross here, and only through the two
+/// explicitly named dangerous accessors below.
+mod ffi {
+    use super::wallet_secret;
+
+    /// PUBLIC-SAFE. Safe to forward to React Native. Explicit, minimal
+    /// conversion from the internal `V1WalletAddresses` (Stage 5D.2/5D.4) —
+    /// no new derivation logic.
+    #[derive(uniffi::Record)]
+    pub struct FfiV1WalletAddresses {
+        pub ethereum: String,
+        pub bitcoin_receive: String,
+        pub bitcoin_change: String,
+    }
+
+    impl From<&wallet_secret::V1WalletAddresses> for FfiV1WalletAddresses {
+        fn from(addresses: &wallet_secret::V1WalletAddresses) -> Self {
+            Self {
+                ethereum: addresses.ethereum.clone(),
+                bitcoin_receive: addresses.bitcoin_receive.clone(),
+                bitcoin_change: addresses.bitcoin_change.clone(),
+            }
+        }
+    }
+
+    /// Structural, non-secret error categories — mirrors `WalletError`
+    /// (Stage 5D.2) exactly. No String/Debug payload, no secret value.
+    #[derive(uniffi::Error, Debug, PartialEq, Eq)]
+    pub enum FfiWalletError {
+        EntropyGenerationFailed,
+        InvalidWordCount,
+        UnrecognizedWord,
+        ChecksumFailed,
+    }
+
+    impl std::fmt::Display for FfiWalletError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // Safe: this only ever prints the fixed variant name (via the
+            // derived Debug), never any field — the enum has no fields.
+            write!(f, "{self:?}")
+        }
+    }
+
+    impl From<wallet_secret::WalletError> for FfiWalletError {
+        fn from(error: wallet_secret::WalletError) -> Self {
+            match error {
+                wallet_secret::WalletError::EntropyGenerationFailed => {
+                    Self::EntropyGenerationFailed
+                }
+                wallet_secret::WalletError::InvalidWordCount => Self::InvalidWordCount,
+                wallet_secret::WalletError::UnrecognizedWord => Self::UnrecognizedWord,
+                wallet_secret::WalletError::ChecksumFailed => Self::ChecksumFailed,
+            }
+        }
+    }
+
+    /// NATIVE-ONLY. Opaque handle wrapping the existing `CreateWalletOutput`
+    /// (Stage 5D.4) unchanged — no duplicated generation/derivation logic.
+    ///
+    /// Deliberately no `Debug`, `Display`, or serialization: this type holds
+    /// secret material (canonical entropy, the mnemonic sentence) for the
+    /// lifetime of the handle. Only `addresses()` is public-safe; the two
+    /// `dangerous_native_only_*` accessors must never be called from
+    /// anything that could forward their result to Expo/React Native.
+    ///
+    /// One-shot semantics are NOT enforced. UniFFI exposes this type to
+    /// Swift as a shared (`Arc`-backed) handle with `&self`-taking methods;
+    /// making the dangerous accessors genuinely consuming/one-shot would
+    /// require interior mutability (e.g. a `Mutex<Option<_>>` "already
+    /// taken" guard) — deliberately not added in this stage per its own
+    /// explicit "do not over-engineer" instruction. The native orchestrator
+    /// that will eventually call these (not built in this stage) MUST treat
+    /// each dangerous accessor as call-at-most-once by convention; this is
+    /// a real, reported limitation, not silently claimed to be enforced.
+    #[derive(uniffi::Object)]
+    pub struct FfiCreateWalletSecretSession {
+        // `pub(crate)`, not `pub`: reachable for deterministic test-fixture
+        // construction elsewhere in this crate (see `tests::ffi_create_session`),
+        // but never part of the FFI-exposed surface — UniFFI's `#[derive(Object)]`
+        // only exposes what's explicitly annotated in the `impl` block below,
+        // never raw struct fields, so this remains invisible to Swift/Kotlin.
+        pub(crate) output: wallet_secret::CreateWalletOutput,
+    }
+
+    #[uniffi::export]
+    impl FfiCreateWalletSecretSession {
+        /// PUBLIC-SAFE.
+        pub fn addresses(&self) -> FfiV1WalletAddresses {
+            FfiV1WalletAddresses::from(&self.output.addresses)
+        }
+
+        /// NATIVE-ONLY DANGEROUS. Returns the canonical BIP-39 entropy
+        /// bytes. Crossing UniFFI necessarily copies these bytes into a
+        /// temporary FFI buffer and then a Swift `Data` — Rust's
+        /// `Zeroizing`/erase-on-drop guarantees do not extend past this
+        /// boundary; the caller is responsible for minimizing this value's
+        /// lifetime and erasing it as far as Swift/Foundation allow. See
+        /// Stage 5D.8A report §J — this is not overclaimed as solved here.
+        pub fn dangerous_native_only_entropy_bytes(&self) -> Vec<u8> {
+            self.output.entropy.as_bytes().to_vec()
+        }
+
+        /// NATIVE-ONLY DANGEROUS. Returns the mnemonic sentence, for
+        /// one-time backup display only. Same FFI-copy caveat as above.
+        pub fn dangerous_native_only_mnemonic_words(&self) -> String {
+            self.output.mnemonic.to_string()
+        }
+    }
+
+    /// NATIVE-ONLY DANGEROUS despite being a UniFFI export: returns a
+    /// session object carrying secret material. Never call this from any
+    /// path reachable by Expo `Function(...)`/`AsyncFunction(...)`.
+    ///
+    /// Composes the existing `create_wallet_v1()` (Stage 5D.4) unchanged —
+    /// entropy generation, mnemonic derivation, seed derivation/erasure,
+    /// and address derivation are not duplicated here.
+    #[uniffi::export]
+    pub fn dangerous_native_only_create_wallet_v1()
+    -> Result<FfiCreateWalletSecretSession, FfiWalletError> {
+        let output = wallet_secret::create_wallet_v1()?;
+        Ok(FfiCreateWalletSecretSession { output })
     }
 }
 
@@ -902,6 +1037,93 @@ mod tests {
                 entropy: _,
                 addresses: _,
             } = output;
+        }
+    }
+
+    mod ffi_create_session {
+        use super::super::ffi::{FfiCreateWalletSecretSession, FfiWalletError};
+        use super::super::wallet_secret::{
+            CanonicalEntropy, CreateWalletOutput, WalletError, derive_v1_wallet_addresses,
+            mnemonic_from_entropy, seed_from_mnemonic,
+        };
+        use zeroize::Zeroizing;
+
+        /// Same BIP-39 test vector 1 entropy/mnemonic used throughout this
+        /// crate's other tests — not a real recovered secret. Constructing a
+        /// session from it directly (rather than calling
+        /// `dangerous_native_only_create_wallet_v1()`) avoids the flakiness
+        /// of comparing independently-random production entropy, per this
+        /// stage's own instruction.
+        const ZERO_ENTROPY_12_WORD_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        fn deterministic_session() -> FfiCreateWalletSecretSession {
+            let entropy: Zeroizing<[u8; 16]> = Zeroizing::new([0u8; 16]);
+            let mnemonic = mnemonic_from_entropy(&entropy);
+            let seed = seed_from_mnemonic(&mnemonic, "");
+            let addresses = derive_v1_wallet_addresses(seed.as_slice());
+            let output = CreateWalletOutput {
+                entropy: CanonicalEntropy::from_generated_16(entropy),
+                mnemonic,
+                addresses,
+            };
+            FfiCreateWalletSecretSession { output }
+        }
+
+        #[test]
+        fn addresses_match_established_reference_outputs() {
+            let addresses = deterministic_session().addresses();
+            assert_eq!(
+                addresses.ethereum,
+                "0x9858EfFD232B4033E47d90003D41EC34EcaEda94"
+            );
+            assert_eq!(
+                addresses.bitcoin_receive,
+                "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+            );
+            assert_eq!(
+                addresses.bitcoin_change,
+                "bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el"
+            );
+        }
+
+        #[test]
+        fn dangerous_accessors_match_established_reference_values() {
+            let session = deterministic_session();
+            assert_eq!(session.dangerous_native_only_entropy_bytes(), vec![0u8; 16]);
+            assert_eq!(
+                session.dangerous_native_only_mnemonic_words(),
+                ZERO_ENTROPY_12_WORD_MNEMONIC
+            );
+        }
+
+        #[test]
+        fn ffi_session_has_no_extra_fields() {
+            // Destructuring names every field exactly; this fails to compile
+            // if a field (e.g. a raw seed) is ever silently added to the
+            // session type itself. `CreateWalletOutput`'s own equivalent
+            // guard (`create_wallet_output_has_no_extra_fields`, above)
+            // already proves the wrapped type carries no seed/Xpriv field.
+            let FfiCreateWalletSecretSession { output: _ } = deterministic_session();
+        }
+
+        #[test]
+        fn wallet_error_maps_structurally_to_ffi_wallet_error() {
+            assert_eq!(
+                FfiWalletError::from(WalletError::EntropyGenerationFailed),
+                FfiWalletError::EntropyGenerationFailed
+            );
+            assert_eq!(
+                FfiWalletError::from(WalletError::InvalidWordCount),
+                FfiWalletError::InvalidWordCount
+            );
+            assert_eq!(
+                FfiWalletError::from(WalletError::UnrecognizedWord),
+                FfiWalletError::UnrecognizedWord
+            );
+            assert_eq!(
+                FfiWalletError::from(WalletError::ChecksumFailed),
+                FfiWalletError::ChecksumFailed
+            );
         }
     }
 }

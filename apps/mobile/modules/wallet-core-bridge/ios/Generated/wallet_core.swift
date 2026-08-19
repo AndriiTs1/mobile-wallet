@@ -507,6 +507,391 @@ fileprivate struct FfiConverterString: FfiConverter {
         writeBytes(&buf, value.utf8)
     }
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
+    }
+}
+
+
+
+
+/**
+ * NATIVE-ONLY. Opaque handle wrapping the existing `CreateWalletOutput`
+ * (Stage 5D.4) unchanged — no duplicated generation/derivation logic.
+ *
+ * Deliberately no `Debug`, `Display`, or serialization: this type holds
+ * secret material (canonical entropy, the mnemonic sentence) for the
+ * lifetime of the handle. Only `addresses()` is public-safe; the two
+ * `dangerous_native_only_*` accessors must never be called from
+ * anything that could forward their result to Expo/React Native.
+ *
+ * One-shot semantics are NOT enforced. UniFFI exposes this type to
+ * Swift as a shared (`Arc`-backed) handle with `&self`-taking methods;
+ * making the dangerous accessors genuinely consuming/one-shot would
+ * require interior mutability (e.g. a `Mutex<Option<_>>` "already
+ * taken" guard) — deliberately not added in this stage per its own
+ * explicit "do not over-engineer" instruction. The native orchestrator
+ * that will eventually call these (not built in this stage) MUST treat
+ * each dangerous accessor as call-at-most-once by convention; this is
+ * a real, reported limitation, not silently claimed to be enforced.
+ */
+public protocol FfiCreateWalletSecretSessionProtocol: AnyObject, Sendable {
+    
+    /**
+     * PUBLIC-SAFE.
+     */
+    func addresses()  -> FfiV1WalletAddresses
+    
+    /**
+     * NATIVE-ONLY DANGEROUS. Returns the canonical BIP-39 entropy
+     * bytes. Crossing UniFFI necessarily copies these bytes into a
+     * temporary FFI buffer and then a Swift `Data` — Rust's
+     * `Zeroizing`/erase-on-drop guarantees do not extend past this
+     * boundary; the caller is responsible for minimizing this value's
+     * lifetime and erasing it as far as Swift/Foundation allow. See
+     * Stage 5D.8A report §J — this is not overclaimed as solved here.
+     */
+    func dangerousNativeOnlyEntropyBytes()  -> Data
+    
+    /**
+     * NATIVE-ONLY DANGEROUS. Returns the mnemonic sentence, for
+     * one-time backup display only. Same FFI-copy caveat as above.
+     */
+    func dangerousNativeOnlyMnemonicWords()  -> String
+    
+}
+/**
+ * NATIVE-ONLY. Opaque handle wrapping the existing `CreateWalletOutput`
+ * (Stage 5D.4) unchanged — no duplicated generation/derivation logic.
+ *
+ * Deliberately no `Debug`, `Display`, or serialization: this type holds
+ * secret material (canonical entropy, the mnemonic sentence) for the
+ * lifetime of the handle. Only `addresses()` is public-safe; the two
+ * `dangerous_native_only_*` accessors must never be called from
+ * anything that could forward their result to Expo/React Native.
+ *
+ * One-shot semantics are NOT enforced. UniFFI exposes this type to
+ * Swift as a shared (`Arc`-backed) handle with `&self`-taking methods;
+ * making the dangerous accessors genuinely consuming/one-shot would
+ * require interior mutability (e.g. a `Mutex<Option<_>>` "already
+ * taken" guard) — deliberately not added in this stage per its own
+ * explicit "do not over-engineer" instruction. The native orchestrator
+ * that will eventually call these (not built in this stage) MUST treat
+ * each dangerous accessor as call-at-most-once by convention; this is
+ * a real, reported limitation, not silently claimed to be enforced.
+ */
+open class FfiCreateWalletSecretSession: FfiCreateWalletSecretSessionProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_wallet_core_fn_clone_fficreatewalletsecretsession(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_wallet_core_fn_free_fficreatewalletsecretsession(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * PUBLIC-SAFE.
+     */
+open func addresses() -> FfiV1WalletAddresses  {
+    return try!  FfiConverterTypeFfiV1WalletAddresses_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_wallet_core_fn_method_fficreatewalletsecretsession_addresses(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * NATIVE-ONLY DANGEROUS. Returns the canonical BIP-39 entropy
+     * bytes. Crossing UniFFI necessarily copies these bytes into a
+     * temporary FFI buffer and then a Swift `Data` — Rust's
+     * `Zeroizing`/erase-on-drop guarantees do not extend past this
+     * boundary; the caller is responsible for minimizing this value's
+     * lifetime and erasing it as far as Swift/Foundation allow. See
+     * Stage 5D.8A report §J — this is not overclaimed as solved here.
+     */
+open func dangerousNativeOnlyEntropyBytes() -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_wallet_core_fn_method_fficreatewalletsecretsession_dangerous_native_only_entropy_bytes(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * NATIVE-ONLY DANGEROUS. Returns the mnemonic sentence, for
+     * one-time backup display only. Same FFI-copy caveat as above.
+     */
+open func dangerousNativeOnlyMnemonicWords() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_wallet_core_fn_method_fficreatewalletsecretsession_dangerous_native_only_mnemonic_words(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiCreateWalletSecretSession: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = FfiCreateWalletSecretSession
+
+    public static func lift(_ handle: UInt64) throws -> FfiCreateWalletSecretSession {
+        return FfiCreateWalletSecretSession(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: FfiCreateWalletSecretSession) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiCreateWalletSecretSession {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: FfiCreateWalletSecretSession, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCreateWalletSecretSession_lift(_ handle: UInt64) throws -> FfiCreateWalletSecretSession {
+    return try FfiConverterTypeFfiCreateWalletSecretSession.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiCreateWalletSecretSession_lower(_ value: FfiCreateWalletSecretSession) -> UInt64 {
+    return FfiConverterTypeFfiCreateWalletSecretSession.lower(value)
+}
+
+
+
+
+/**
+ * PUBLIC-SAFE. Safe to forward to React Native. Explicit, minimal
+ * conversion from the internal `V1WalletAddresses` (Stage 5D.2/5D.4) —
+ * no new derivation logic.
+ */
+public struct FfiV1WalletAddresses: Equatable, Hashable {
+    public var ethereum: String
+    public var bitcoinReceive: String
+    public var bitcoinChange: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(ethereum: String, bitcoinReceive: String, bitcoinChange: String) {
+        self.ethereum = ethereum
+        self.bitcoinReceive = bitcoinReceive
+        self.bitcoinChange = bitcoinChange
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiV1WalletAddresses: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiV1WalletAddresses: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiV1WalletAddresses {
+        return
+            try FfiV1WalletAddresses(
+                ethereum: FfiConverterString.read(from: &buf), 
+                bitcoinReceive: FfiConverterString.read(from: &buf), 
+                bitcoinChange: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiV1WalletAddresses, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.ethereum, into: &buf)
+        FfiConverterString.write(value.bitcoinReceive, into: &buf)
+        FfiConverterString.write(value.bitcoinChange, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiV1WalletAddresses_lift(_ buf: RustBuffer) throws -> FfiV1WalletAddresses {
+    return try FfiConverterTypeFfiV1WalletAddresses.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiV1WalletAddresses_lower(_ value: FfiV1WalletAddresses) -> RustBuffer {
+    return FfiConverterTypeFfiV1WalletAddresses.lower(value)
+}
+
+
+/**
+ * Structural, non-secret error categories — mirrors `WalletError`
+ * (Stage 5D.2) exactly. No String/Debug payload, no secret value.
+ */
+public 
+enum FfiWalletError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+    
+    
+    case EntropyGenerationFailed
+    case InvalidWordCount
+    case UnrecognizedWord
+    case ChecksumFailed
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
+}
+
+#if compiler(>=6)
+extension FfiWalletError: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiWalletError: FfiConverterRustBuffer {
+    typealias SwiftType = FfiWalletError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiWalletError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .EntropyGenerationFailed
+        case 2: return .InvalidWordCount
+        case 3: return .UnrecognizedWord
+        case 4: return .ChecksumFailed
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiWalletError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case .EntropyGenerationFailed:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .InvalidWordCount:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .UnrecognizedWord:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .ChecksumFailed:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiWalletError_lift(_ buf: RustBuffer) throws -> FfiWalletError {
+    return try FfiConverterTypeFfiWalletError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiWalletError_lower(_ value: FfiWalletError) -> RustBuffer {
+    return FfiConverterTypeFfiWalletError.lower(value)
+}
 /**
  * Returns a deterministic health-check response.
  *
@@ -531,6 +916,22 @@ public func version() -> String  {
     )
 })
 }
+/**
+ * NATIVE-ONLY DANGEROUS despite being a UniFFI export: returns a
+ * session object carrying secret material. Never call this from any
+ * path reachable by Expo `Function(...)`/`AsyncFunction(...)`.
+ *
+ * Composes the existing `create_wallet_v1()` (Stage 5D.4) unchanged —
+ * entropy generation, mnemonic derivation, seed derivation/erasure,
+ * and address derivation are not duplicated here.
+ */
+public func dangerousNativeOnlyCreateWalletV1()throws  -> FfiCreateWalletSecretSession  {
+    return try  FfiConverterTypeFfiCreateWalletSecretSession_lift(try rustCallWithError(FfiConverterTypeFfiWalletError_lift) {
+        uniffiCallStatus in
+    uniffi_wallet_core_fn_func_dangerous_native_only_create_wallet_v1(uniffiCallStatus
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -551,6 +952,18 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallet_core_checksum_func_version() != 58704) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallet_core_checksum_func_dangerous_native_only_create_wallet_v1() != 53050) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallet_core_checksum_method_fficreatewalletsecretsession_addresses() != 42244) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallet_core_checksum_method_fficreatewalletsecretsession_dangerous_native_only_entropy_bytes() != 15371) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallet_core_checksum_method_fficreatewalletsecretsession_dangerous_native_only_mnemonic_words() != 27314) {
         return InitializationResult.apiChecksumMismatch
     }
 
