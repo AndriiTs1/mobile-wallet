@@ -20,12 +20,26 @@ import UIKit
 // into Expo/React Native — this screen renders and validates entirely
 // natively.
 //
-// `WalletBackupConfirmationStore.markConfirmed()`'s ONLY production call
-// site in the entire codebase is inside this file, in
-// `handleVerifyTapped()` below, reached only on a genuinely successful
-// `WalletBackupVerificationModel.validate(...)` result.
+// Stage 5E.9E2: this view no longer decides whether a successful
+// verification persists `backupConfirmed` — it never references
+// `WalletBackupConfirmationStore` at all. That decision is made by
+// `WalletBackupPhrasePresenter` (native code, never JS) and handed to this
+// view as `onVerificationSucceeded`, a plain completion-policy closure —
+// production supplies a closure that calls
+// `WalletBackupConfirmationStore.markConfirmed()`; the DEV-only preview
+// entry point (`WalletBackupPhrasePresenter.presentPreview()`, `#if DEBUG`
+// only) supplies a no-op instead, so a developer previewing this exact
+// screen against a real wallet can never mutate its real confirmation
+// state. This view is otherwise byte-identical in behavior between the two
+// callers — same UI, same model, same validation.
 
 struct WalletBackupVerificationView: View {
+    /// Completion policy for a successful verification, decided entirely
+    /// by the caller (`WalletBackupPhrasePresenter`) — see this file's own
+    /// header comment. Called before `onVerified` below, in
+    /// `handleVerifyTapped()`'s success branch only.
+    let onVerificationSucceeded: () -> Void
+
     /// Called exactly once, only after a successful verification — the
     /// same closure `WalletBackupPhrasePresenter` resumes its Stage 5E.8
     /// continuation from. This view has no knowledge of, and no
@@ -49,8 +63,9 @@ struct WalletBackupVerificationView: View {
     @State private var selections: [Int: String] = [:]
     @State private var showError = false
 
-    init(mnemonic: String, onVerified: @escaping () -> Void) {
+    init(mnemonic: String, onVerificationSucceeded: @escaping () -> Void, onVerified: @escaping () -> Void) {
         self.mnemonic = mnemonic
+        self.onVerificationSucceeded = onVerificationSucceeded
         self.onVerified = onVerified
     }
 
@@ -282,9 +297,10 @@ struct WalletBackupVerificationView: View {
         guard let model, allQuestionsAnswered else { return }
 
         if model.validate(selections: selections) {
-            // The ONLY production call site for this write in the entire
-            // codebase — see this file's own header comment.
-            WalletBackupConfirmationStore.markConfirmed()
+            // Completion policy decided by the caller — see this file's
+            // own header comment. Production marks confirmed; the
+            // DEV-only preview path does not.
+            onVerificationSucceeded()
             onVerified()
         } else {
             // Generic only — never reveals which position was wrong, never

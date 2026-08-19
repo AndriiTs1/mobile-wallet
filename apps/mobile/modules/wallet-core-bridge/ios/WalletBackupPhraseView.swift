@@ -134,6 +134,14 @@ struct WalletBackupPhraseView: View {
     /// `NavigationStack`/broader navigation architecture.
     @State private var isVerifying = false
 
+    /// Stage 5E.9E2: the completion policy for a successful verification —
+    /// passed straight through to `WalletBackupVerificationView` (see its
+    /// own doc comment). This screen never inspects or decides the policy
+    /// itself; it only threads through whatever
+    /// `WalletBackupPhrasePresenter` supplied, keeping that decision in
+    /// exactly one place (the presenter, native code, never JS).
+    let onVerificationSucceeded: () -> Void
+
     /// Invoked exactly once — only after the user successfully completes
     /// native backup verification (Stage 5E.9D; see
     /// `WalletBackupVerificationView`'s `onVerified`). No longer invoked
@@ -142,9 +150,8 @@ struct WalletBackupPhraseView: View {
     /// `WalletBackupPhrasePresenter`, which resumes its Stage 5E.8
     /// continuation from this exact closure, is unchanged: "this entire
     /// native backup flow is finished, dismiss and let RN proceed." Does
-    /// NOT persist any "backup confirmed" state itself — that write
-    /// happens inside `WalletBackupVerificationView`, immediately before
-    /// this closure is called on success.
+    /// NOT persist any "backup confirmed" state itself — see
+    /// `onVerificationSucceeded` above for that.
     ///
     /// Dismissal: this screen still has no explicit close/back button —
     /// the existing full-screen modal presentation (Stage 5E.7F.1) has no
@@ -206,7 +213,11 @@ struct WalletBackupPhraseView: View {
                 // `phraseView(mnemonic:)` below already documents for its
                 // own use of it. Only one canonical mnemonic copy is ever
                 // alive at a time during this native session.
-                WalletBackupVerificationView(mnemonic: mnemonic, onVerified: onWrittenDown)
+                WalletBackupVerificationView(
+                    mnemonic: mnemonic,
+                    onVerificationSucceeded: onVerificationSucceeded,
+                    onVerified: onWrittenDown
+                )
             } else {
                 phraseView(mnemonic: mnemonic)
             }

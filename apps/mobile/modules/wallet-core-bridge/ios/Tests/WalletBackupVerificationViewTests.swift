@@ -86,40 +86,34 @@ final class WalletBackupVerificationViewTests: XCTestCase {
         XCTAssertFalse(model.validate(selections: selections))
     }
 
-    // MARK: - F/G/H: markConfirmed write path
+    // MARK: - F/G/H: completion-policy wiring (Stage 5E.9E2 moved the
+    // actual markConfirmed() call out of this file entirely — see
+    // WalletBackupPhrasePreviewTests.swift for the up-to-date single-call-
+    // site proof against WalletBackupPhrasePresenter.swift instead).
 
-    func testMarkConfirmedIsOnlyCalledInsideSuccessfulValidateBranch() throws {
+    func testSuccessfulValidateBranchCallsCompletionPolicyBeforeOnVerified() throws {
         let source = try codeOnlySource(of: "WalletBackupVerificationView.swift")
 
         let ifRange = try XCTUnwrap(source.range(of: "if model.validate(selections: selections) {"))
-        let markRange = try XCTUnwrap(source.range(of: "WalletBackupConfirmationStore.markConfirmed()"))
+        let policyRange = try XCTUnwrap(source.range(of: "onVerificationSucceeded()"))
+        let verifiedRange = try XCTUnwrap(source.range(of: "onVerified()"))
         let elseRange = try XCTUnwrap(source.range(of: "} else {", range: ifRange.upperBound..<source.endIndex))
 
-        // markConfirmed() must appear strictly between the success branch's
-        // opening and its `else` — i.e. inside the `true` branch only.
-        XCTAssertTrue(markRange.lowerBound > ifRange.upperBound && markRange.upperBound < elseRange.lowerBound)
+        // Both calls must appear strictly between the success branch's
+        // opening and its `else` — i.e. inside the `true` branch only —
+        // and in that order (policy decided/applied before the dismiss
+        // signal fires).
+        XCTAssertTrue(policyRange.lowerBound > ifRange.upperBound && policyRange.upperBound < elseRange.lowerBound)
+        XCTAssertTrue(verifiedRange.lowerBound > policyRange.upperBound && verifiedRange.upperBound < elseRange.lowerBound)
     }
 
-    func testMarkConfirmedHasExactlyOneProductionCallSite() throws {
-        let iosDirectory = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // Tests/
-            .deletingLastPathComponent() // ios/
-        let productionFiles = try FileManager.default
-            .contentsOfDirectory(at: iosDirectory, includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension == "swift" }
-
-        var callSites: [String] = []
-        for fileURL in productionFiles {
-            let source = try codeOnlySource(of: fileURL.lastPathComponent)
-            // Count call sites only — `func markConfirmed(` (the
-            // definition itself, in WalletBackupConfirmationStore.swift)
-            // is deliberately excluded from this count.
-            if source.contains("WalletBackupConfirmationStore.markConfirmed()") {
-                callSites.append(fileURL.lastPathComponent)
-            }
-        }
-
-        XCTAssertEqual(callSites, ["WalletBackupVerificationView.swift"])
+    /// Stage 5E.9E2: this view must no longer decide the confirmation
+    /// policy itself — it only threads through whatever the caller
+    /// supplied. A stronger, simpler guarantee than counting call sites:
+    /// this type is never referenced here at all.
+    func testViewNeverReferencesBackupConfirmationStore() throws {
+        let source = try codeOnlySource(of: "WalletBackupVerificationView.swift")
+        XCTAssertFalse(source.contains("WalletBackupConfirmationStore"))
     }
 
     // MARK: - I: failed verification regenerates positions/model

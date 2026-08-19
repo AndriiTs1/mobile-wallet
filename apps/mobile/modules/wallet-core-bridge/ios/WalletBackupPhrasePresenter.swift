@@ -42,6 +42,49 @@ enum WalletBackupPhrasePresenter {
     /// produces; no wallet secret crosses this boundary in either
     /// direction, unchanged from every prior stage.
     ///
+    /// This is the PRODUCTION entry point: its completion policy
+    /// (`onVerificationSucceeded`, passed to `presentFlow` below) is the
+    /// one and only production call site of
+    /// `WalletBackupConfirmationStore.markConfirmed()` in the entire
+    /// codebase — see Stage 5E.9E2's own doc comment on `presentFlow` for
+    /// why this decision now lives here rather than inside
+    /// `WalletBackupVerificationView` itself.
+    @MainActor
+    static func present() async throws {
+        try await presentFlow(onVerificationSucceeded: {
+            WalletBackupConfirmationStore.markConfirmed()
+        })
+    }
+
+    #if DEBUG
+    /// Stage 5E.9E2 — DEV-ONLY preview entry point. Exists only in DEBUG
+    /// builds (compiled out entirely in Release, per this stage's own
+    /// dev-gating requirement) and is wired to Expo only from a matching
+    /// `#if DEBUG`-gated `Function` in `WalletCoreBridgeModule.swift`,
+    /// itself called only from `__DEV__`-gated RN Showcase Mode — belt and
+    /// suspenders, neither layer alone is relied upon.
+    ///
+    /// Presents the exact same real native UI
+    /// (`WalletBackupPhraseView`/`WalletBackupVerificationView`) against
+    /// the exact same already-persisted wallet entropy as `present()` —
+    /// nothing is duplicated, generated, or faked. The ONLY difference is
+    /// the completion policy passed to `presentFlow`: a no-op instead of
+    /// `WalletBackupConfirmationStore.markConfirmed()`. This decision is
+    /// made here, in native code, once, at the call site that distinguishes
+    /// "this is a real onboarding/resume flow" from "this is a design
+    /// preview" — RN never passes a boolean or any other parameter that
+    /// could control this; it only ever chooses which of two distinctly
+    /// named Expo functions to call.
+    @MainActor
+    static func presentPreview() async throws {
+        try await presentFlow(onVerificationSucceeded: {
+            // Deliberately empty — a developer previewing this screen
+            // against a real wallet must never mutate that wallet's real
+            // `backupConfirmed` state, in either direction.
+        })
+    }
+    #endif
+
     /// Swipe/interactive dismissal: `modalPresentationStyle` is
     /// `.fullScreen` (Stage 5E.7F.1), which — unlike `.pageSheet` — does
     /// not install iOS's automatic interactive swipe-to-dismiss gesture,
@@ -52,7 +95,7 @@ enum WalletBackupPhrasePresenter {
     /// presently-unreachable code path. If a future stage reintroduces an
     /// interactive dismissal affordance, that stage must also decide how
     /// (or whether) to resume this continuation for that case, since the
-    /// continuation must be resumed exactly once for `present()` to ever
+    /// continuation must be resumed exactly once for `presentFlow` to ever
     /// return; the `didComplete` guard below only protects against a
     /// double-tap of Continue itself.
     ///
@@ -62,8 +105,14 @@ enum WalletBackupPhrasePresenter {
     /// concurrency mechanism this project's existing Swift files already
     /// imply (none use manual GCD dispatch), not a new concurrency
     /// architecture.
+    ///
+    /// Stage 5E.9E2: factored out of `present()` so `presentPreview()`
+    /// above can share every line of presentation/continuation/dismissal
+    /// logic, differing only in `onVerificationSucceeded` — the smallest
+    /// native design that avoids duplicating this screen's UI or wiring,
+    /// per this stage's own "do not duplicate the full UI" requirement.
     @MainActor
-    static func present() async throws {
+    private static func presentFlow(onVerificationSucceeded: @escaping () -> Void) async throws {
         guard let rootViewController = Self.keyWindowRootViewController() else {
             throw WalletBackupPhrasePresentationError.noPresentingViewController
         }
@@ -76,12 +125,15 @@ enum WalletBackupPhrasePresenter {
             // function, so a plain `Bool` is sufficient without extra
             // synchronization.
             var didComplete = false
-            let backupView = WalletBackupPhraseView(onWrittenDown: {
-                guard !didComplete else { return }
-                didComplete = true
-                continuation.resume()
-                hostingController?.dismiss(animated: true)
-            })
+            let backupView = WalletBackupPhraseView(
+                onVerificationSucceeded: onVerificationSucceeded,
+                onWrittenDown: {
+                    guard !didComplete else { return }
+                    didComplete = true
+                    continuation.resume()
+                    hostingController?.dismiss(animated: true)
+                }
+            )
             let controller = UIHostingController(rootView: backupView)
             // Stage 5E.7F.1: without this, an unset `modalPresentationStyle`
             // defaults to `.automatic` on iOS 13+, which resolves to a page

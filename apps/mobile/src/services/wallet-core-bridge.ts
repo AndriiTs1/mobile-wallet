@@ -15,6 +15,7 @@ type WalletCoreBridgeApi = {
   createWalletAndPresentBackup(): Promise<void>;
   presentBackupPhrase(): Promise<void>;
   hasBackupConfirmed(): boolean;
+  presentBackupPhrasePreview(): Promise<void>;
 };
 
 /**
@@ -94,4 +95,23 @@ export function hasBackupConfirmed(): boolean {
     throw new Error('Native Wallet Core module unavailable in this runtime.');
   }
   return bridge.hasBackupConfirmed();
+}
+
+/**
+ * Stage 5E.9E2 — DEV-ONLY. Callers must gate every call site behind
+ * `__DEV__` (the native side already only exists in DEBUG builds — see
+ * `WalletCoreBridgeModule.swift` — this wrapper adds no gating of its own
+ * beyond that). Presents the exact same real native backup/verification UI
+ * as `presentBackupPhrase`, against the exact same already-persisted
+ * wallet entropy, but a successful verification never marks backup
+ * confirmed — see `WalletBackupPhrasePresenter.presentPreview()`'s own
+ * doc comment. Resolves with no value; rejects with a generic,
+ * non-descriptive error on any failure.
+ */
+export function presentBackupPhrasePreview(): Promise<void> {
+  const bridge = loadWalletCoreBridge();
+  if (!bridge) {
+    return Promise.reject(new Error('Native Wallet Core module unavailable in this runtime.'));
+  }
+  return bridge.presentBackupPhrasePreview();
 }

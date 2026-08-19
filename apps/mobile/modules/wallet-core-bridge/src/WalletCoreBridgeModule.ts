@@ -24,6 +24,16 @@ declare class WalletCoreBridgeModule extends NativeModule<{}> {
   // corresponding mutation function is exposed here or anywhere else in
   // this module; only native code may ever set the underlying flag true.
   hasBackupConfirmed(): boolean;
+  // Stage 5E.9E2: DEV-ONLY. Only exists as a callable native method in
+  // DEBUG builds (the underlying Swift Function is compiled out entirely
+  // in Release — see WalletCoreBridgeModule.swift) — RN must only ever
+  // call this from __DEV__-gated Showcase Mode. Secret-free: takes no
+  // argument, resolves with no value. Presents the exact same real native
+  // UI as presentBackupPhrase against the exact same already-persisted
+  // wallet entropy, but a successful verification does NOT mark backup
+  // confirmed — see WalletBackupPhrasePresenter.presentPreview()'s own
+  // doc comment for why that decision is made entirely in native code.
+  presentBackupPhrasePreview(): Promise<void>;
 }
 
 export default requireNativeModule<WalletCoreBridgeModule>('WalletCoreBridge');

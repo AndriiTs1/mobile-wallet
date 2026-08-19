@@ -51,5 +51,22 @@ public class WalletCoreBridgeModule: Module {
     Function("hasBackupConfirmed") {
       WalletBackupConfirmationStore.isConfirmed()
     }
+
+    #if DEBUG
+    // Stage 5E.9E2: DEV-ONLY. Compiled out entirely in Release builds —
+    // this Function simply does not exist as an Expo-callable method
+    // outside DEBUG, on top of RN only ever calling it from `__DEV__`-
+    // gated Showcase Mode (apps/mobile/src/app/_layout.tsx). Secret-free,
+    // same as presentBackupPhrase: takes no argument, resolves with no
+    // value. Presents the exact same real native UI against the exact
+    // same already-persisted wallet entropy as presentBackupPhrase — the
+    // ONLY difference (decided entirely in native code, per
+    // WalletBackupPhrasePresenter.presentPreview()'s own doc comment) is
+    // that a successful preview verification does NOT call
+    // WalletBackupConfirmationStore.markConfirmed().
+    AsyncFunction("presentBackupPhrasePreview") {
+      try await WalletBackupPhrasePresenter.presentPreview()
+    }
+    #endif
   }
 }

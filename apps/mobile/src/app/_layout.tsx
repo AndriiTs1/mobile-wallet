@@ -13,6 +13,7 @@ import {
   hasBackupConfirmed,
   hasWallet,
   presentBackupPhrase,
+  presentBackupPhrasePreview,
 } from '@/services/wallet-core-bridge';
 
 SplashScreen.preventAutoHideAsync();
@@ -32,13 +33,11 @@ const GENERIC_CREATE_ERROR = 'Something went wrong creating your wallet. Please 
  * release build, since `__DEV__` is a build-time constant that is always
  * `false` there.
  *
- * Known Stage 5E.9E1 limitation, intentionally left unfixed here (deferred
- * to Stage 5E.9E2): `ShowcaseCreateWalletGate`'s existing-wallet branch
- * below still calls the real `presentBackupPhrase()` — if a developer runs
- * it to completion against a real wallet, the native verification screen's
- * success path (`WalletBackupVerificationView`, Stage 5E.9D) genuinely
- * calls `WalletBackupConfirmationStore.markConfirmed()` for that real
- * wallet, same as production would. This gate is unchanged in this stage.
+ * Stage 5E.9E2: `ShowcaseCreateWalletGate`'s existing-wallet branch below
+ * now calls the DEV-ONLY `presentBackupPhrasePreview()` instead of the
+ * real `presentBackupPhrase()` — see that branch's own doc comment. A
+ * developer can run the full preview flow to completion against a real
+ * wallet without ever mutating that wallet's real `backupConfirmed` state.
  */
 const DEVELOPMENT_SHOWCASE_MODE = __DEV__;
 
@@ -226,9 +225,19 @@ type ShowcaseState = {
  * Stage 5E.8: `presentBackupPhrase()`/`createWalletAndPresentBackup()` now
  * resolve only once the user taps Continue on the native backup screen
  * (see `WalletBackupPhrasePresenter.present()`), not merely once it
- * appears — so, matching `ProductionStartupGate`'s existing behavior,
- * this gate now transitions to Home (`AppTabs`) on that resolution
- * instead of returning to `CreateWalletScreen` indefinitely.
+ * appears.
+ *
+ * Stage 5E.9E2: the existing-wallet branch below now calls the DEV-ONLY
+ * `presentBackupPhrasePreview()` instead of the real `presentBackupPhrase()`
+ * — the real backup/verification screen's successful-verification path
+ * now genuinely writes `backupConfirmed` (Stage 5E.9D), so previewing it
+ * against a real wallet must never be able to mutate that wallet's real
+ * confirmation state. This branch therefore also no longer routes to Home
+ * afterward (`backupConfirmed` is deliberately left exactly as it was) —
+ * it returns to this same showcase screen so the flow can be previewed
+ * repeatedly. The fresh-wallet branch is unchanged: that wallet is
+ * genuinely created through the real flow, so routing to Home afterward
+ * (a truthfully confirmed backup) remains correct, same as production.
  */
 function ShowcaseCreateWalletGate() {
   const [state, setState] = useState<ShowcaseState>({
@@ -247,20 +256,21 @@ function ShowcaseCreateWalletGate() {
       // wallet already exists, createWalletAndPresentBackup() must never
       // be called against it: this branch exists specifically so Showcase
       // Mode never even attempts that call against an existing wallet.
-      // Instead, reveal the existing wallet's own already-persisted
-      // phrase via the same secret-free presentation call onboarding uses.
       if (hasWallet()) {
-        await presentBackupPhrase();
+        // DEV-ONLY preview (Stage 5E.9E2) — reveals the existing wallet's
+        // own already-persisted phrase and lets the verification screen
+        // be exercised visually, but never marks that real wallet's
+        // backup confirmed either way.
+        await presentBackupPhrasePreview();
+        setState({ isCreating: false, errorMessage: null, completed: false });
       } else {
         // No wallet yet on this dev device — exercise the real, genuine
-        // create/persist/backup-present flow, unmodified.
+        // create/persist/backup-present flow, unmodified. This wallet is
+        // actually created through the real flow, so a truthfully
+        // confirmed backup and a Home transition afterward are correct.
         await createWalletAndPresentBackup();
+        setState({ isCreating: false, errorMessage: null, completed: true });
       }
-      // Reached only after the user taps Continue (Stage 5E.8) — never
-      // creates a second wallet, and never persists any "backup
-      // confirmed" state; this is presentational routing only, same as
-      // ProductionStartupGate's own `walletExists` -> `<AppTabs />` step.
-      setState({ isCreating: false, errorMessage: null, completed: true });
     } catch {
       // Generic only, same treatment as production — never the caught
       // error's internal detail.
