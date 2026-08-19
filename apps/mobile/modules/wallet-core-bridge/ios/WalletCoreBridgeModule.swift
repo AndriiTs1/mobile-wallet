@@ -19,5 +19,14 @@ public class WalletCoreBridgeModule: Module {
     AsyncFunction("presentBackupPhrase") {
       try await WalletBackupPhrasePresenter.present()
     }
+
+    // Stage 5E.5: secret-free. Takes no argument, resolves with no value.
+    // Composes the existing create/persist orchestrator (Stage 5D.8C/
+    // 5D.8D) and the backup-phrase presenter (Stage 5E.4) natively; on any
+    // failure only a generic error crosses to React Native (see
+    // WalletCreateAndBackupPresenter's own doc comment).
+    AsyncFunction("createWalletAndPresentBackup") {
+      try await WalletCreateAndBackupPresenter.createAndPresentBackup()
+    }
   }
 }
