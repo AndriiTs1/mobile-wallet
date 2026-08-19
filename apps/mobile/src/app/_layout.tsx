@@ -1,7 +1,7 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { StyleSheet, View, useColorScheme } from 'react-native';
+import { AppState, StyleSheet, View, useColorScheme } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AppLockScreen } from '@/components/app-lock-screen';
@@ -149,6 +149,22 @@ type AppLockPhase =
  */
 const INITIAL_UNLOCK_HOLD_MS = 1000;
 
+/**
+ * Stage 5F.5A — background/foreground re-lock. How long the app may stay
+ * `'unlocked'` while backgrounded before the next foreground return requires
+ * fresh `requestAppUnlock()` authentication again. A deliberately short V1
+ * value: long enough to absorb a quick glance at another app/notification
+ * without re-prompting, short enough to meaningfully bound the window a
+ * backgrounded, already-unlocked wallet is exposed to an unattended device.
+ * Product-tunable; not derived from any Apple-mandated value.
+ *
+ * iOS cannot distinguish "the device was locked" from an ordinary app
+ * switch at the AppState level (both produce the same `background`
+ * transition) — this single elapsed-time policy deliberately covers both
+ * cases uniformly rather than attempting an unverifiable heuristic.
+ */
+const BACKGROUND_GRACE_PERIOD_MS = 15_000;
+
 function AppLockGate({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<AppLockPhase>(() => {
     try {
@@ -208,6 +224,68 @@ function AppLockGate({ children }: { children: ReactNode }) {
       return () => clearTimeout(timer);
     }
     beginAuthentication();
+  }, [phase.phase]);
+
+  // Stage 5F.5A: when this component instance last saw the app leave
+  // 'active' while already 'unlocked' — null whenever there is nothing to
+  // evaluate (no such departure has happened yet since becoming unlocked).
+  // Ephemeral only: a plain in-memory timestamp, never persisted, cleared
+  // on every read.
+  const backgroundedAtRef = useRef<number | null>(null);
+
+  /**
+   * Stage 5F.5A: re-arms/evaluates the background grace period. Reads and
+   * writes `phase` via `setPhase` ONLY — it never calls
+   * `requestAppUnlock()` itself. Every actual native authentication call
+   * still funnels exclusively through the single effect above (and its
+   * `unlockInFlightRef` single-flight guard), so this listener can never
+   * create a second, overlapping native call: it can only ever move
+   * `'unlocked'` back to `'locked'`, which that other effect then picks up
+   * on its own next run.
+   *
+   * Deliberately ignores `'inactive'` entirely — that iOS state fires
+   * constantly for reasons that are not "the user left the app" (Control
+   * Center, an incoming-call banner, the app switcher preview, and,
+   * critically, the native Face ID/passcode sheet itself). Reacting to it
+   * here would both over-trigger on trivial interruptions and risk a
+   * Face-ID prompt loop (sheet appears -> 'inactive' -> mistaken for
+   * backgrounding -> re-lock -> sheet dismisses -> 'active' -> immediate
+   * re-auth again). Only a confirmed 'background' entry arms the clock;
+   * only a confirmed 'active' entry evaluates it.
+   */
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'background') {
+        if (phase.phase === 'unlocked') {
+          backgroundedAtRef.current = Date.now();
+        }
+        return;
+      }
+      if (nextState !== 'active') {
+        // 'inactive' — ignored, see doc comment above.
+        return;
+      }
+      if (phase.phase !== 'unlocked') {
+        return;
+      }
+      const backgroundedAt = backgroundedAtRef.current;
+      backgroundedAtRef.current = null;
+      if (backgroundedAt === null) {
+        // No 'active' -> 'background' departure was ever observed while
+        // unlocked (e.g. the very first 'active' event after becoming
+        // unlocked) — nothing to evaluate, stay unlocked.
+        return;
+      }
+      if (Date.now() - backgroundedAt >= BACKGROUND_GRACE_PERIOD_MS) {
+        // Re-enters 'locked', which the single-flight effect above picks
+        // up on its next run — isFirstAttemptRef is already false by this
+        // point in the component's lifetime, so this immediately issues a
+        // fresh requestAppUnlock() call with no cold-launch hold.
+        setPhase({ phase: 'locked' });
+      }
+    });
+
+    return () => subscription.remove();
   }, [phase.phase]);
 
   const handleRetry = useCallback(() => {

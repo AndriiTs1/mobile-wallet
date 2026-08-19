@@ -73,13 +73,16 @@ final class WalletAppLockGateTests: XCTestCase {
 
     func testRejectionNeverTransitionsToUnlocked() throws {
         let source = try mobileAppSource(at: "src/app/_layout.tsx")
-        // Exactly three occurrences of the 'unlocked' phase literal in the
-        // whole file: the AppLockPhase type-union member, the render
-        // condition that permits mounting children, and the single
-        // success-path assignment inside .then (proven in test D) — no
-        // other code path, including .catch, can ever produce it.
+        // Five occurrences of the 'unlocked' phase literal in the whole
+        // file: the AppLockPhase type-union member, the children-mounting
+        // render condition, the single WRITE inside requestAppUnlock()'s
+        // success branch (proven exclusive by test D — .catch never
+        // produces it), and two Stage 5F.5A READS inside the AppState
+        // re-lock listener (deciding whether to arm the background clock,
+        // and whether to evaluate it on foreground) — reads only, never a
+        // second write path to 'unlocked'.
         let occurrences = source.components(separatedBy: "'unlocked'").count - 1
-        XCTAssertEqual(occurrences, 3, "'unlocked' must appear only in the AppLockPhase type, the children-mounting render condition, and the requestAppUnlock() success branch")
+        XCTAssertEqual(occurrences, 5, "'unlocked' must appear only in the AppLockPhase type, the render condition, the requestAppUnlock() success branch, and the two Stage 5F.5A AppState read-checks")
     }
 
     // MARK: - F: retry results in a fresh requestAppUnlock() evaluation
@@ -160,25 +163,104 @@ final class WalletAppLockGateTests: XCTestCase {
         }
     }
 
-    // MARK: - K (superseded by Stage 5F.4C): no AppState/background-foreground/
-    // grace-period/recurring-timer logic
+    // MARK: - K (superseded by Stage 5F.5A): AppState usage scoped to the
+    // approved re-lock listener only
 
-    /// Stage 5F.4B asserted `setTimeout(` was absent entirely — correct
-    /// before any cold-launch timing gate existed. Stage 5F.4C intentionally
-    /// supersedes that: exactly one `setTimeout(` now exists, as a one-shot
-    /// UX hold around the FIRST `requestAppUnlock()` call only (see tests
-    /// N/O below) — never a recurring/backgrounding-oriented timer, and
-    /// never `AppState`/lifecycle-driven. This re-expresses the still-valid
-    /// part of the old invariant: no `AppState`, event-listener-based
-    /// background/foreground detection, `setInterval`, or timestamp-based
-    /// grace-period logic exists anywhere.
-    func testNoAppStateOrBackgroundForegroundLifecycleLogic() throws {
-        let layoutSource = try mobileAppSource(at: "src/app/_layout.tsx")
+    /// Stage 5F.4B/5F.4C asserted `AppState`/`addEventListener(` were absent
+    /// entirely — correct before any lifecycle re-lock existed. Stage 5F.5A
+    /// intentionally supersedes that: `AppState.addEventListener` is now
+    /// legitimately used, exactly once, for the background/foreground
+    /// re-lock listener. This re-expresses the still-valid part of the old
+    /// invariant: that listener may only ever call `setPhase` — never
+    /// `requestAppUnlock()` directly (all actual native calls remain
+    /// funneled through the pre-existing single-flight effect) — and it
+    /// must never inspect `'inactive'`, only `'background'`/`'active'`
+    /// (see this stage's own Face-ID-loop analysis). `setInterval`, a
+    /// recurring/second timer, and timestamp-comparison logic outside this
+    /// one listener still do not exist anywhere.
+    func testAppStateUsageIsScopedToTheApprovedReLockListenerOnly() throws {
+        let source = try mobileAppSource(at: "src/app/_layout.tsx")
+
+        let occurrences = source.components(separatedBy: "AppState.addEventListener(").count - 1
+        XCTAssertEqual(occurrences, 1, "AppState.addEventListener must be called exactly once")
+
+        let listenerStart = try XCTUnwrap(source.range(of: "AppState.addEventListener('change', (nextState) => {"))
+        let listenerEnd = try XCTUnwrap(source.range(of: "\n    });", range: listenerStart.upperBound..<source.endIndex))
+        let listenerBody = source[listenerStart.upperBound..<listenerEnd.lowerBound]
+
+        XCTAssertFalse(listenerBody.contains("requestAppUnlock("), "the AppState listener must never call requestAppUnlock() directly")
+        XCTAssertFalse(listenerBody.contains("'inactive'"), "'inactive' must never be inspected by the re-lock listener")
+        XCTAssertTrue(listenerBody.contains("nextState === 'background'"))
+        XCTAssertTrue(listenerBody.contains("nextState !== 'active'"))
+
         let lockScreenSource = try mobileAppSource(at: "src/components/app-lock-screen.tsx")
-        for term in ["AppState", "addEventListener(", "setInterval(", "Date.now(", "foreground"] {
-            XCTAssertFalse(layoutSource.contains(term), "_layout.tsx must not contain \(term)")
+        XCTAssertFalse(lockScreenSource.contains("AppState"))
+        for term in ["addEventListener(", "setInterval(", "foreground"] {
             XCTAssertFalse(lockScreenSource.contains(term), "app-lock-screen.tsx must not contain \(term)")
         }
+    }
+
+    // MARK: - R: the grace-period threshold correctly gates re-lock
+
+    func testBackgroundGracePeriodThresholdGatesReLock() throws {
+        let source = try mobileAppSource(at: "src/app/_layout.tsx")
+        XCTAssertTrue(source.contains("const BACKGROUND_GRACE_PERIOD_MS = 15_000;"))
+
+        let listenerStart = try XCTUnwrap(source.range(of: "AppState.addEventListener('change', (nextState) => {"))
+        let listenerEnd = try XCTUnwrap(source.range(of: "\n    });", range: listenerStart.upperBound..<source.endIndex))
+        let listenerBody = source[listenerStart.upperBound..<listenerEnd.lowerBound]
+
+        let thresholdStart = try XCTUnwrap(listenerBody.range(of: "if (Date.now() - backgroundedAt >= BACKGROUND_GRACE_PERIOD_MS) {"))
+        let thresholdEnd = try XCTUnwrap(listenerBody.range(of: "\n      }", range: thresholdStart.upperBound..<listenerBody.endIndex))
+        let thresholdBody = listenerBody[thresholdStart.upperBound..<thresholdEnd.lowerBound]
+        XCTAssertTrue(thresholdBody.contains("setPhase({ phase: 'locked' });"))
+
+        // No unconditional/always-lock path exists anywhere in the
+        // listener — re-locking happens ONLY behind this one threshold
+        // comparison, proving both "short interval does not re-lock" and
+        // "interval over threshold does" from the same structural fact.
+        XCTAssertEqual(
+            listenerBody.components(separatedBy: "setPhase({ phase: 'locked' })").count - 1, 1,
+            "setPhase to 'locked' must appear exactly once in the listener, gated by the grace-period comparison"
+        )
+    }
+
+    // MARK: - S: the re-lock listener lives inside AppLockGate, unreachable
+    // from Showcase Mode
+
+    func testAppStateReLockEffectIsScopedInsideAppLockGate() throws {
+        let source = try mobileAppSource(at: "src/app/_layout.tsx")
+        let gateStart = try XCTUnwrap(source.range(of: "function AppLockGate("))
+        let gateEnd = try XCTUnwrap(source.range(of: "\n}", range: gateStart.upperBound..<source.endIndex))
+        let gateBody = source[gateStart.upperBound..<gateEnd.lowerBound]
+        XCTAssertTrue(
+            gateBody.contains("AppState.addEventListener("),
+            "the re-lock listener must be declared inside AppLockGate, structurally unreachable from Showcase Mode's separate render branch"
+        )
+    }
+
+    // MARK: - T: snapshot privacy is explicitly deferred to Stage 5F.5B
+
+    func testSnapshotPrivacyIsExplicitlyDeferredToStage5F5B() throws {
+        // Stage 5F.5A is lifecycle re-lock only. App-switcher snapshot
+        // privacy (a cosmetic cover, unconditional on the grace-period
+        // timer, never a substitute for this structural re-lock gate) is
+        // deliberately NOT implemented here — per the Stage 5F.5
+        // pre-implementation audit's own recommendation to split into a
+        // separately named Stage 5F.5B. This documents that deferral
+        // explicitly; update (never silently delete) once 5F.5B lands.
+        let componentsDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // Tests/
+            .deletingLastPathComponent() // ios/
+            .deletingLastPathComponent() // wallet-core-bridge/
+            .deletingLastPathComponent() // modules/
+            .deletingLastPathComponent() // apps/mobile/
+            .appendingPathComponent("src/components")
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: componentsDir.path)) ?? []
+        XCTAssertFalse(
+            names.contains { $0.lowercased().contains("privacy") || $0.lowercased().contains("snapshot") },
+            "no snapshot-privacy cover component is expected yet — deferred to Stage 5F.5B"
+        )
     }
 
     // MARK: - N: the initial cold-launch attempt is held for 1000ms
@@ -201,7 +283,7 @@ final class WalletAppLockGateTests: XCTestCase {
     func testInitialPreAuthPresentationIsShieldOnly() throws {
         let layoutSource = try mobileAppSource(at: "src/app/_layout.tsx")
         // 'locked' (the phase held for INITIAL_UNLOCK_HOLD_MS, and the
-        // phase a retry also transiently passes through before its
+        // phase a retry/re-lock also transiently passes through before its
         // immediate re-authentication) must map to the 'holding' variant —
         // never 'authenticating' or 'error' — for both the initial hold and
         // any later re-entry, so the pre-auth screen is always shield-only.
@@ -209,24 +291,29 @@ final class WalletAppLockGateTests: XCTestCase {
             "const variant = phase.phase === 'authError' ? 'error' : phase.phase === 'authenticating' ? 'authenticating' : 'holding';"
         ))
 
+        // AppLockScreen itself has since been polished to collapse
+        // 'holding'/'authenticating' into one identical shield-only
+        // presentation, gated on `variant === 'error'` (rather than the
+        // earlier `variant !== 'holding'`) — the spinner and its
+        // `ActivityIndicator` import were removed entirely. This test is
+        // updated to match that already-committed shape; the underlying
+        // property (shield-only pre-auth, no title/message/retry outside
+        // an actual error) is unchanged.
         let lockScreenSource = try mobileAppSource(at: "src/components/app-lock-screen.tsx")
-        XCTAssertTrue(lockScreenSource.contains("variant !== 'holding'"), "non-holding content must be gated behind a variant check")
+        XCTAssertFalse(lockScreenSource.contains("ActivityIndicator"), "the spinner was removed — no ActivityIndicator import/usage should remain")
+        XCTAssertTrue(lockScreenSource.contains("variant === 'error'"), "non-shield-only content must be gated behind the error-variant check")
 
         // Bounded: the JSX guarded by that check is the ONLY place the
-        // title/spinner/message/retry button are ever rendered — 'holding'
-        // itself renders nothing beyond the single, always-present
+        // title/message/retry button are ever rendered — every other
+        // variant renders nothing beyond the single, always-present
         // ShieldMark.
-        let guardStart = try XCTUnwrap(lockScreenSource.range(of: "variant !== 'holding' ? ("))
+        let guardStart = try XCTUnwrap(lockScreenSource.range(of: "variant === 'error' ? ("))
         let shieldMarkRange = try XCTUnwrap(lockScreenSource.range(of: "<ShieldMark"))
         XCTAssertTrue(shieldMarkRange.upperBound < guardStart.lowerBound, "ShieldMark must render unconditionally, before the variant-gated content")
 
-        // Bounded to the render body only (ShieldMark through the variant
-        // guard) — deliberately excludes the top-of-file `import {
-        // ActivityIndicator, ... }` statement, which legitimately names
-        // these identifiers without rendering them.
         let renderBodyBeforeGuard = lockScreenSource[shieldMarkRange.upperBound..<guardStart.lowerBound]
-        for term in ["Unlock Mobile Wallet", "ActivityIndicator", "Authentication was cancelled", "Try Again"] {
-            XCTAssertFalse(renderBodyBeforeGuard.contains(term), "\(term) must not render unconditionally / outside the non-holding branch")
+        for term in ["Unlock Mobile Wallet", "Authentication was cancelled", "Try Again"] {
+            XCTAssertFalse(renderBodyBeforeGuard.contains(term), "\(term) must not render unconditionally / outside the error-only branch")
         }
     }
 
