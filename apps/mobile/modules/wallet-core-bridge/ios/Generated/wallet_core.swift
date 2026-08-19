@@ -814,6 +814,7 @@ enum FfiWalletError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError
     case InvalidWordCount
     case UnrecognizedWord
     case ChecksumFailed
+    case InvalidEntropyLength
 
     
 
@@ -847,6 +848,7 @@ public struct FfiConverterTypeFfiWalletError: FfiConverterRustBuffer {
         case 2: return .InvalidWordCount
         case 3: return .UnrecognizedWord
         case 4: return .ChecksumFailed
+        case 5: return .InvalidEntropyLength
 
          default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -873,6 +875,10 @@ public struct FfiConverterTypeFfiWalletError: FfiConverterRustBuffer {
         
         case .ChecksumFailed:
             writeInt(&buf, Int32(4))
+        
+        
+        case .InvalidEntropyLength:
+            writeInt(&buf, Int32(5))
         
         }
     }
@@ -932,6 +938,32 @@ public func dangerousNativeOnlyCreateWalletV1()throws  -> FfiCreateWalletSecretS
     )
 })
 }
+/**
+ * NATIVE-ONLY DANGEROUS, Stage 5E.2. Reconstructs the BIP-39 mnemonic
+ * sentence from previously-persisted canonical V1 entropy — the exact
+ * bytes `WalletSecureStorage.read()` returns, native-side. Never
+ * generates new entropy and never creates/retains a session; this is
+ * the "reveal reconstructs the sentence from stored entropy" path
+ * ADR-005 §2 anticipated. Composes `wallet_secret::mnemonic_from_canonical_entropy_v1`
+ * unchanged — no second BIP-39 implementation.
+ *
+ * V1 requires exactly 16 bytes of entropy; any other length fails
+ * structurally with `FfiWalletError::InvalidEntropyLength` rather than
+ * silently truncating/padding. The caller-owned `entropy` buffer is
+ * best-effort zeroed before this function returns (mirroring the
+ * `derivation` module's own `non_secure_erase()` comments: this is not
+ * a guarantee against every compiler- or allocator-level copy). Never
+ * call this from any path reachable by Expo `Function(...)`/
+ * `AsyncFunction(...)`.
+ */
+public func dangerousNativeOnlyMnemonicFromEntropyV1(entropy: Data)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiWalletError_lift) {
+        uniffiCallStatus in
+    uniffi_wallet_core_fn_func_dangerous_native_only_mnemonic_from_entropy_v1(
+        FfiConverterData.lower(entropy),uniffiCallStatus
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -955,6 +987,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallet_core_checksum_func_dangerous_native_only_create_wallet_v1() != 53050) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallet_core_checksum_func_dangerous_native_only_mnemonic_from_entropy_v1() != 58891) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallet_core_checksum_method_fficreatewalletsecretsession_addresses() != 42244) {

@@ -193,6 +193,7 @@ mod wallet_secret {
         InvalidWordCount,
         UnrecognizedWord,
         ChecksumFailed,
+        InvalidEntropyLength,
     }
 
     /// Generates V1 entropy (128-bit / 16 bytes, ADR-004 §3) from the OS
@@ -244,6 +245,25 @@ mod wallet_secret {
     /// callers must supply it fresh for every derivation (ADR-005 §2).
     pub(crate) fn seed_from_mnemonic(mnemonic: &Mnemonic, passphrase: &str) -> Zeroizing<[u8; 64]> {
         Zeroizing::new(mnemonic.to_seed(passphrase))
+    }
+
+    /// Stage 5E.2: deterministically reconstructs the BIP-39 mnemonic
+    /// sentence from previously-persisted canonical V1 entropy (ADR-005
+    /// §2's "reveal reconstructs the sentence from the stored entropy"
+    /// design) — never generates new entropy, never touches the seed.
+    /// V1 accepts exactly 16 bytes (128-bit, 12-word) canonical entropy;
+    /// any other length fails structurally rather than silently
+    /// truncating or padding. Composes the existing `mnemonic_from_entropy`
+    /// unchanged — no second BIP-39 implementation.
+    pub(crate) fn mnemonic_from_canonical_entropy_v1(
+        entropy: &[u8],
+    ) -> Result<Mnemonic, WalletError> {
+        let fixed: Zeroizing<[u8; 16]> = Zeroizing::new(
+            entropy
+                .try_into()
+                .map_err(|_| WalletError::InvalidEntropyLength)?,
+        );
+        Ok(mnemonic_from_entropy(&fixed))
     }
 
     /// Public-data-only V1 address bundle — safe to hold in ordinary
@@ -414,6 +434,7 @@ mod ffi {
         InvalidWordCount,
         UnrecognizedWord,
         ChecksumFailed,
+        InvalidEntropyLength,
     }
 
     impl std::fmt::Display for FfiWalletError {
@@ -433,6 +454,7 @@ mod ffi {
                 wallet_secret::WalletError::InvalidWordCount => Self::InvalidWordCount,
                 wallet_secret::WalletError::UnrecognizedWord => Self::UnrecognizedWord,
                 wallet_secret::WalletError::ChecksumFailed => Self::ChecksumFailed,
+                wallet_secret::WalletError::InvalidEntropyLength => Self::InvalidEntropyLength,
             }
         }
     }
@@ -502,6 +524,33 @@ mod ffi {
     -> Result<FfiCreateWalletSecretSession, FfiWalletError> {
         let output = wallet_secret::create_wallet_v1()?;
         Ok(FfiCreateWalletSecretSession { output })
+    }
+
+    /// NATIVE-ONLY DANGEROUS, Stage 5E.2. Reconstructs the BIP-39 mnemonic
+    /// sentence from previously-persisted canonical V1 entropy — the exact
+    /// bytes `WalletSecureStorage.read()` returns, native-side. Never
+    /// generates new entropy and never creates/retains a session; this is
+    /// the "reveal reconstructs the sentence from stored entropy" path
+    /// ADR-005 §2 anticipated. Composes `wallet_secret::mnemonic_from_canonical_entropy_v1`
+    /// unchanged — no second BIP-39 implementation.
+    ///
+    /// V1 requires exactly 16 bytes of entropy; any other length fails
+    /// structurally with `FfiWalletError::InvalidEntropyLength` rather than
+    /// silently truncating/padding. The caller-owned `entropy` buffer is
+    /// best-effort zeroed before this function returns (mirroring the
+    /// `derivation` module's own `non_secure_erase()` comments: this is not
+    /// a guarantee against every compiler- or allocator-level copy). Never
+    /// call this from any path reachable by Expo `Function(...)`/
+    /// `AsyncFunction(...)`.
+    #[uniffi::export]
+    pub fn dangerous_native_only_mnemonic_from_entropy_v1(
+        mut entropy: Vec<u8>,
+    ) -> Result<String, FfiWalletError> {
+        let result = wallet_secret::mnemonic_from_canonical_entropy_v1(&entropy)
+            .map(|mnemonic| mnemonic.to_string())
+            .map_err(FfiWalletError::from);
+        entropy.fill(0);
+        result
     }
 }
 
@@ -774,7 +823,8 @@ mod tests {
     mod v1_wallet_secret {
         use super::super::wallet_secret::{
             V1WalletAddresses, WalletError, derive_v1_wallet_addresses, entropy_from_mnemonic,
-            generate_v1_entropy, mnemonic_from_entropy, parse_import_mnemonic, seed_from_mnemonic,
+            generate_v1_entropy, mnemonic_from_canonical_entropy_v1, mnemonic_from_entropy,
+            parse_import_mnemonic, seed_from_mnemonic,
         };
         use bip39::Mnemonic;
         use std::str::FromStr;
@@ -804,6 +854,36 @@ mod tests {
             let (recovered, len) = entropy_from_mnemonic(&mnemonic);
             assert_eq!(len, 16);
             assert_eq!(&recovered[..len], &entropy[..]);
+        }
+
+        #[test]
+        fn canonical_entropy_reconstructs_expected_12_word_mnemonic() {
+            let mnemonic =
+                mnemonic_from_canonical_entropy_v1(&[0u8; 16]).expect("valid 16-byte entropy");
+            assert_eq!(mnemonic.to_string(), ZERO_ENTROPY_12_WORD_MNEMONIC);
+        }
+
+        #[test]
+        fn canonical_entropy_reconstruction_is_deterministic() {
+            let first = mnemonic_from_canonical_entropy_v1(&[0u8; 16]).expect("valid entropy");
+            let second = mnemonic_from_canonical_entropy_v1(&[0u8; 16]).expect("valid entropy");
+            assert_eq!(first.to_string(), second.to_string());
+        }
+
+        #[test]
+        fn canonical_entropy_wrong_length_is_rejected() {
+            assert_eq!(
+                mnemonic_from_canonical_entropy_v1(&[0u8; 15]),
+                Err(WalletError::InvalidEntropyLength)
+            );
+            assert_eq!(
+                mnemonic_from_canonical_entropy_v1(&[0u8; 17]),
+                Err(WalletError::InvalidEntropyLength)
+            );
+            assert_eq!(
+                mnemonic_from_canonical_entropy_v1(&[]),
+                Err(WalletError::InvalidEntropyLength)
+            );
         }
 
         #[test]
@@ -1123,6 +1203,50 @@ mod tests {
             assert_eq!(
                 FfiWalletError::from(WalletError::ChecksumFailed),
                 FfiWalletError::ChecksumFailed
+            );
+            assert_eq!(
+                FfiWalletError::from(WalletError::InvalidEntropyLength),
+                FfiWalletError::InvalidEntropyLength
+            );
+        }
+    }
+
+    mod ffi_mnemonic_from_entropy {
+        use super::super::ffi::{FfiWalletError, dangerous_native_only_mnemonic_from_entropy_v1};
+
+        /// Same BIP-39 test vector 1 entropy/mnemonic used throughout this
+        /// crate's other tests — not a real recovered secret.
+        const ZERO_ENTROPY_12_WORD_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        #[test]
+        fn reconstructs_expected_mnemonic_from_valid_entropy() {
+            let mnemonic = dangerous_native_only_mnemonic_from_entropy_v1(vec![0u8; 16])
+                .expect("valid 16-byte entropy");
+            assert_eq!(mnemonic, ZERO_ENTROPY_12_WORD_MNEMONIC);
+        }
+
+        #[test]
+        fn is_deterministic_for_the_same_entropy() {
+            let first = dangerous_native_only_mnemonic_from_entropy_v1(vec![0u8; 16])
+                .expect("valid entropy");
+            let second = dangerous_native_only_mnemonic_from_entropy_v1(vec![0u8; 16])
+                .expect("valid entropy");
+            assert_eq!(first, second);
+        }
+
+        #[test]
+        fn invalid_entropy_length_fails_structurally() {
+            assert_eq!(
+                dangerous_native_only_mnemonic_from_entropy_v1(vec![0u8; 15]),
+                Err(FfiWalletError::InvalidEntropyLength)
+            );
+            assert_eq!(
+                dangerous_native_only_mnemonic_from_entropy_v1(vec![0u8; 32]),
+                Err(FfiWalletError::InvalidEntropyLength)
+            );
+            assert_eq!(
+                dangerous_native_only_mnemonic_from_entropy_v1(Vec::new()),
+                Err(FfiWalletError::InvalidEntropyLength)
             );
         }
     }
