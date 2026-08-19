@@ -43,11 +43,17 @@ enum WalletCreateAndBackupPresenter {
     /// sequence on one actor with no internal hop, matching Stage 5E.4's
     /// own reasoning for preferring `@MainActor` + `await` over manual
     /// `DispatchQueue` dispatch.
+    ///
+    /// `async` as of Stage 5E.8: `WalletBackupPhrasePresenter.present()`
+    /// now suspends until the user taps Continue on the backup screen
+    /// (see its own doc comment), so this function — and therefore the
+    /// `createWalletAndPresentBackup` Expo call wrapping it — resolves
+    /// only once that happens, not merely once the screen appears.
     @MainActor
-    static func createAndPresentBackup() throws {
+    static func createAndPresentBackup() async throws {
         do {
             _ = try WalletNativeCreateOrchestrator.createAndPersist()
-            try WalletBackupPhrasePresenter.present()
+            try await WalletBackupPhrasePresenter.present()
         } catch {
             throw WalletCreateAndBackupError.failed
         }

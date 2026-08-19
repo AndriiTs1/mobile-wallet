@@ -25,39 +25,73 @@ enum WalletBackupPhrasePresentationError: Error {
 
 enum WalletBackupPhrasePresenter {
     /// Presents `WalletBackupPhraseView` modally over the app's current key
-    /// window. `@MainActor`-isolated: the compiler enforces that callers
-    /// reach this only via an actor hop (an `await` from an async context),
-    /// rather than relying on a raw `DispatchQueue.main.async` — the
-    /// smallest concurrency mechanism this project's existing Swift files
-    /// already imply (none use manual GCD dispatch), not a new
-    /// concurrency architecture.
+    /// window, and — as of Stage 5E.8 — suspends until the user actually
+    /// taps Continue, rather than returning as soon as the presentation
+    /// animation starts. Before this stage, `present()` was a synchronous
+    /// `throws` function called with `try await` purely for its
+    /// `@MainActor` isolation hop: it returned immediately after calling
+    /// `UIViewController.present`, so the Expo `presentBackupPhrase`/
+    /// `createWalletAndPresentBackup` promises on the RN side resolved the
+    /// instant the sheet appeared, long before the user had read or
+    /// confirmed anything — the root cause of Stage 5E.8's "returns to
+    /// Create Wallet instead of Home" bug. `present()` is now genuinely
+    /// `async`, wrapping the presentation in
+    /// `withCheckedThrowingContinuation` and resuming it only from
+    /// `onWrittenDown` (i.e. only when Continue is tapped) — that is the
+    /// sole, non-secret "backup screen finished" signal this function ever
+    /// produces; no wallet secret crosses this boundary in either
+    /// direction, unchanged from every prior stage.
     ///
-    /// Uses the system default (`.pageSheet`-style) modal presentation,
-    /// which already supports interactive swipe-to-dismiss — the minimal
-    /// "Cancel" affordance this stage calls for, without adding a new
-    /// button to `WalletBackupPhraseView` itself. Swipe-to-dismiss never
-    /// invokes `onWrittenDown`, so dismissing this way is never confused
-    /// with backup confirmation (nothing in this file persists any
-    /// confirmation state either way).
+    /// Swipe/interactive dismissal: `modalPresentationStyle` is
+    /// `.fullScreen` (Stage 5E.7F.1), which — unlike `.pageSheet` — does
+    /// not install iOS's automatic interactive swipe-to-dismiss gesture,
+    /// and this screen has no Cancel/back affordance of its own. Continue
+    /// is therefore the only reachable way to dismiss this screen today,
+    /// so there is currently no swipe/cancel path that needs a separate
+    /// "not completion" signal — adding one now would be guarding a
+    /// presently-unreachable code path. If a future stage reintroduces an
+    /// interactive dismissal affordance, that stage must also decide how
+    /// (or whether) to resume this continuation for that case, since the
+    /// continuation must be resumed exactly once for `present()` to ever
+    /// return; the `didComplete` guard below only protects against a
+    /// double-tap of Continue itself.
+    ///
+    /// `@MainActor`-isolated: the compiler enforces that callers reach this
+    /// only via an actor hop (an `await` from an async context), rather
+    /// than relying on a raw `DispatchQueue.main.async` — the smallest
+    /// concurrency mechanism this project's existing Swift files already
+    /// imply (none use manual GCD dispatch), not a new concurrency
+    /// architecture.
     @MainActor
-    static func present() throws {
+    static func present() async throws {
         guard let rootViewController = Self.keyWindowRootViewController() else {
             throw WalletBackupPhrasePresentationError.noPresentingViewController
         }
 
-        var hostingController: UIViewController?
-        let backupView = WalletBackupPhraseView(onWrittenDown: {
-            hostingController?.dismiss(animated: true)
-        })
-        let controller = UIHostingController(rootView: backupView)
-        // Stage 5E.7F.1: without this, an unset `modalPresentationStyle`
-        // defaults to `.automatic` on iOS 13+, which resolves to a page
-        // sheet (rounded top corners, inset/shrunk card, presenting view
-        // visible behind it) — not the approved full-screen design.
-        controller.modalPresentationStyle = .fullScreen
-        hostingController = controller
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            var hostingController: UIViewController?
+            // Guards against a double-tap of Continue resuming the same
+            // continuation twice (a fatal misuse per Swift Concurrency) —
+            // `onWrittenDown` runs on the main actor, same as this whole
+            // function, so a plain `Bool` is sufficient without extra
+            // synchronization.
+            var didComplete = false
+            let backupView = WalletBackupPhraseView(onWrittenDown: {
+                guard !didComplete else { return }
+                didComplete = true
+                continuation.resume()
+                hostingController?.dismiss(animated: true)
+            })
+            let controller = UIHostingController(rootView: backupView)
+            // Stage 5E.7F.1: without this, an unset `modalPresentationStyle`
+            // defaults to `.automatic` on iOS 13+, which resolves to a page
+            // sheet (rounded top corners, inset/shrunk card, presenting view
+            // visible behind it) — not the approved full-screen design.
+            controller.modalPresentationStyle = .fullScreen
+            hostingController = controller
 
-        Self.topMostViewController(from: rootViewController).present(controller, animated: true)
+            Self.topMostViewController(from: rootViewController).present(controller, animated: true)
+        }
     }
 
     private static func keyWindowRootViewController() -> UIViewController? {

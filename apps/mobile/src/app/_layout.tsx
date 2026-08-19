@@ -138,23 +138,34 @@ function ProductionStartupGate() {
 type ShowcaseState = {
   isCreating: boolean;
   errorMessage: string | null;
+  completed: boolean;
 };
 
 /**
  * Stage 5E.7D — DEVELOPMENT-ONLY. Always renders the real
- * `CreateWalletScreen`, regardless of `hasWallet()`, and never transitions
- * to Home — dismissing the native backup screen simply returns here, so
- * Create Wallet -> Backup Phrase -> Create Wallet can be inspected
- * repeatedly during development. Pressing the button branches on
- * `hasWallet()` to pick a safe native action — see the safety comment
- * inside `handleShowcaseCreate`.
+ * `CreateWalletScreen` regardless of `hasWallet()`, so Create Wallet ->
+ * Backup Phrase can be inspected during development the same as
+ * production. Pressing the button branches on `hasWallet()` to pick a
+ * safe native action — see the safety comment inside
+ * `handleShowcaseCreate`.
+ *
+ * Stage 5E.8: `presentBackupPhrase()`/`createWalletAndPresentBackup()` now
+ * resolve only once the user taps Continue on the native backup screen
+ * (see `WalletBackupPhrasePresenter.present()`), not merely once it
+ * appears — so, matching `ProductionStartupGate`'s existing behavior,
+ * this gate now transitions to Home (`AppTabs`) on that resolution
+ * instead of returning to `CreateWalletScreen` indefinitely.
  */
 function ShowcaseCreateWalletGate() {
-  const [state, setState] = useState<ShowcaseState>({ isCreating: false, errorMessage: null });
+  const [state, setState] = useState<ShowcaseState>({
+    isCreating: false,
+    errorMessage: null,
+    completed: false,
+  });
 
   const handleShowcaseCreate = useCallback(async () => {
     setState((current) =>
-      current.isCreating ? current : { isCreating: true, errorMessage: null },
+      current.isCreating ? current : { isCreating: true, errorMessage: null, completed: false },
     );
 
     try {
@@ -171,13 +182,21 @@ function ShowcaseCreateWalletGate() {
         // create/persist/backup-present flow, unmodified.
         await createWalletAndPresentBackup();
       }
-      setState({ isCreating: false, errorMessage: null });
+      // Reached only after the user taps Continue (Stage 5E.8) — never
+      // creates a second wallet, and never persists any "backup
+      // confirmed" state; this is presentational routing only, same as
+      // ProductionStartupGate's own `walletExists` -> `<AppTabs />` step.
+      setState({ isCreating: false, errorMessage: null, completed: true });
     } catch {
       // Generic only, same treatment as production — never the caught
       // error's internal detail.
-      setState({ isCreating: false, errorMessage: GENERIC_CREATE_ERROR });
+      setState({ isCreating: false, errorMessage: GENERIC_CREATE_ERROR, completed: false });
     }
   }, []);
+
+  if (state.completed) {
+    return <AppTabs />;
+  }
 
   return (
     <CreateWalletScreen
