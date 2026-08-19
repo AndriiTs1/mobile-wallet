@@ -18,6 +18,12 @@ declare class WalletCoreBridgeModule extends NativeModule<{}> {
   // detail. Throws (rejects the calling context) on a genuine storage
   // failure rather than silently reporting `false`.
   hasWallet(): boolean;
+  // Stage 5E.9B: secret-free. Returns only whether the backup
+  // verification flow has ever completed — non-secret metadata, never any
+  // wallet secret, byte content, or storage detail. Read-only: no
+  // corresponding mutation function is exposed here or anywhere else in
+  // this module; only native code may ever set the underlying flag true.
+  hasBackupConfirmed(): boolean;
 }
 
 export default requireNativeModule<WalletCoreBridgeModule>('WalletCoreBridge');

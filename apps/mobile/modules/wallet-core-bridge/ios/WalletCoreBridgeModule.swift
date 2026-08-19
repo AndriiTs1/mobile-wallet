@@ -38,5 +38,18 @@ public class WalletCoreBridgeModule: Module {
     Function("hasWallet") {
       try WalletSecureStorage.exists()
     }
+
+    // Stage 5E.9B: secret-free. Returns only whether the backup
+    // verification flow has ever completed — a read of non-secret
+    // UserDefaults-backed metadata, structurally separate from
+    // WalletSecureStorage's encrypted envelope (see
+    // WalletBackupConfirmationStore's own doc comment). Requires no
+    // Secure Enclave/biometric gate to read. No corresponding
+    // write/mutation function is exposed to Expo in this stage — only
+    // native code may ever set this flag true, and nothing in this stage
+    // calls that native setter from any production path yet.
+    Function("hasBackupConfirmed") {
+      WalletBackupConfirmationStore.isConfirmed()
+    }
   }
 }

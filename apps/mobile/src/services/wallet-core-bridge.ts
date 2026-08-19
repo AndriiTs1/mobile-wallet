@@ -14,6 +14,7 @@ type WalletCoreBridgeApi = {
   hasWallet(): boolean;
   createWalletAndPresentBackup(): Promise<void>;
   presentBackupPhrase(): Promise<void>;
+  hasBackupConfirmed(): boolean;
 };
 
 /**
@@ -77,4 +78,20 @@ export function presentBackupPhrase(): Promise<void> {
     return Promise.reject(new Error('Native Wallet Core module unavailable in this runtime.'));
   }
   return bridge.presentBackupPhrase();
+}
+
+/**
+ * Stage 5E.9B — foundation only, not yet wired into any routing decision.
+ * Whether the backup verification flow has ever completed. Non-secret
+ * metadata read only: no corresponding write/mutation function exists on
+ * this bridge — only native code may ever set the underlying flag true.
+ * Throws if the native module is unavailable in this runtime, or if the
+ * native call itself throws.
+ */
+export function hasBackupConfirmed(): boolean {
+  const bridge = loadWalletCoreBridge();
+  if (!bridge) {
+    throw new Error('Native Wallet Core module unavailable in this runtime.');
+  }
+  return bridge.hasBackupConfirmed();
 }
