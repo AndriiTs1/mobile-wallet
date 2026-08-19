@@ -13,6 +13,11 @@ declare class WalletCoreBridgeModule extends NativeModule<{}> {
   // non-descriptive error on any failure. No wallet secret ever crosses
   // this boundary in either direction.
   createWalletAndPresentBackup(): Promise<void>;
+  // Stage 5E.6: secret-free. Returns only whether wallet secret storage
+  // currently exists — never any byte content, address, or storage-error
+  // detail. Throws (rejects the calling context) on a genuine storage
+  // failure rather than silently reporting `false`.
+  hasWallet(): boolean;
 }
 
 export default requireNativeModule<WalletCoreBridgeModule>('WalletCoreBridge');

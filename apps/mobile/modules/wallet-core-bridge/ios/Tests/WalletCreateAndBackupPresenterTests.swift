@@ -72,6 +72,14 @@ final class WalletCreateAndBackupPresenterTests: XCTestCase {
         }
     }
 
+    // MARK: - Stage 5E.6: hasWallet
+
+    func testHasWalletFunctionTakesNoArgumentAndCallsExistsDirectly() throws {
+        let source = try codeOnlySource(of: "WalletCoreBridgeModule.swift")
+        XCTAssertTrue(source.contains("Function(\"hasWallet\") {"))
+        XCTAssertTrue(source.contains("try WalletSecureStorage.exists()"))
+    }
+
     // MARK: - Helpers
 
     private func codeOnlySource(of filename: String) throws -> String {

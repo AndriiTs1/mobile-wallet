@@ -28,5 +28,15 @@ public class WalletCoreBridgeModule: Module {
     AsyncFunction("createWalletAndPresentBackup") {
       try await WalletCreateAndBackupPresenter.createAndPresentBackup()
     }
+
+    // Stage 5E.6: secret-free. Returns only a boolean — whether wallet
+    // secret storage currently exists — never any byte content, address,
+    // or Keychain/OSStatus detail. Calls WalletSecureStorage.exists()
+    // directly: it is one of this bridge's ordinary safe wrapper calls,
+    // not a native-only secret accessor — it only checks the encrypted
+    // envelope's mere presence, never any wallet secret.
+    Function("hasWallet") {
+      try WalletSecureStorage.exists()
+    }
   }
 }

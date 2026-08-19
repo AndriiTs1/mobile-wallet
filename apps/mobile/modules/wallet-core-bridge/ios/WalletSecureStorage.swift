@@ -193,6 +193,24 @@ enum WalletSecureStorage {
         try deleteKeychainItem(account: keyAccount)
     }
 
+    /// Stage 5E.6. Returns whether a wallet secret is currently persisted
+    /// — a structural existence check only. Reads only the raw encrypted
+    /// envelope's mere presence (`readEnvelopeData()`); never decrypts it,
+    /// never touches the Secure Enclave key, never returns any byte
+    /// content. Only `.itemNotFound` is treated as "absent" (`false`); any
+    /// other error (a genuine Keychain/hardware failure) propagates
+    /// unchanged, unmapped to `false` — a real failure must never be
+    /// reported as "no wallet" (mirrors the same "only `.itemNotFound`
+    /// means absent" discipline `store()` already applies above).
+    static func exists() throws -> Bool {
+        do {
+            _ = try readEnvelopeData()
+            return true
+        } catch WalletSecureStorageError.itemNotFound {
+            return false
+        }
+    }
+
     // MARK: - Secure Enclave key lifecycle
 
     private static func loadOrCreateEnclaveKey() throws -> SecureEnclave.P256.KeyAgreement.PrivateKey {

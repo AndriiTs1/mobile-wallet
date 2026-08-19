@@ -107,6 +107,51 @@ final class WalletSecureStorageTests: XCTestCase {
         }
     }
 
+    // MARK: - Stage 5E.6: exists()
+
+    func testExistsReturnsFalseWhenStorageIsEmpty() throws {
+        try skipIfSecureEnclaveUnavailable()
+
+        // setUpWithError already ensures storage is empty.
+        XCTAssertFalse(try WalletSecureStorage.exists())
+    }
+
+    func testExistsReturnsTrueAfterStore() throws {
+        try skipIfSecureEnclaveUnavailable()
+
+        try WalletSecureStorage.store(data: syntheticBytes)
+        XCTAssertTrue(try WalletSecureStorage.exists())
+    }
+
+    /// `exists()` must never mutate or re-encrypt the stored envelope — it
+    /// only checks the raw envelope's mere presence.
+    func testExistsDoesNotModifyStoredBytes() throws {
+        try skipIfSecureEnclaveUnavailable()
+
+        try WalletSecureStorage.store(data: syntheticBytes)
+        _ = try WalletSecureStorage.exists()
+
+        XCTAssertEqual(try WalletSecureStorage.read(), syntheticBytes)
+    }
+
+    // A genuine (non-`.itemNotFound`) storage/hardware error propagating
+    // out of `exists()` — rather than being silently collapsed into
+    // `false` — is proven by source review of `exists()`'s own
+    // implementation, not by an organic runtime reproduction here: its
+    // `catch` clause matches only `WalletSecureStorageError.itemNotFound`
+    // (Swift's do/catch semantics mean any other thrown error is not
+    // caught and propagates unchanged), mirroring the exact same,
+    // already-accepted "only `.itemNotFound` means absent" discipline
+    // `store()`'s own duplicate-check already applies above. Reliably
+    // triggering a non-`.itemNotFound` Keychain failure (e.g.
+    // `storageReadFailure`) from a unit test without invasive mocking of
+    // `SecItemCopyMatching` was judged unreasonable test infrastructure
+    // for this stage, per this stage's own "use source audits only where
+    // runtime tests would require unreasonable infrastructure" guidance —
+    // `testCorruptedEnclaveKeyReferenceIsNotTreatedAsAbsent` above already
+    // establishes the identical discipline for the analogous key-loading
+    // path using the raw-Keychain-write technique available there.
+
     func testSecureHardwareUnavailableIsReportedStructurally() throws {
         // `SecureEnclave.isAvailable` is NOT reliably false on Simulator —
         // verified empirically (Stage 5D.6B report §L): on this Apple
