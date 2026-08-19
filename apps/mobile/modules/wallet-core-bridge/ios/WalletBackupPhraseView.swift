@@ -91,7 +91,13 @@ final class WalletBackupPhraseViewModel: ObservableObject {
 /// since native Swift can't import the RN theme module. Kept as this
 /// file's single source of truth for color so both onboarding screens read
 /// as the same product, not two different visual brands.
-private enum Palette {
+///
+/// Stage 5E.9D: no longer `private` — `WalletBackupVerificationView.swift`
+/// (a sibling file, same module) reuses this exact palette rather than
+/// duplicating it, so the phrase-display and verification screens can
+/// never visually drift apart. Still `internal` only — never `public`,
+/// never Expo-visible; this is a pure-color namespace with no wallet data.
+enum Palette {
     static let background = Color(red: 0x0A / 255.0, green: 0x0B / 255.0, blue: 0x0F / 255.0)
     static let surface = Color(red: 0x15 / 255.0, green: 0x17 / 255.0, blue: 0x1D / 255.0)
     static let text = Color.white
@@ -101,6 +107,14 @@ private enum Palette {
     // border, per this stage's "lighter, not heavier" cell treatment. Only
     // consumer is `wordCell`'s overlay stroke.
     static let border = Color.white.opacity(0.06)
+    // Stage 5E.9D: mirrors the RN theme's `Colors.dark.negative` exactly,
+    // for the same cross-platform-consistency reason as every other color
+    // here. Only consumer: `WalletBackupVerificationView`'s generic
+    // failure message — never used to carry meaning on its own (paired
+    // with text and a VoiceOver announcement), per this stage's own
+    // "no critical meaning depends only on color" accessibility
+    // requirement.
+    static let negative = Color(red: 0xFF / 255.0, green: 0x61 / 255.0, blue: 0x61 / 255.0)
 }
 
 /// The backup-phrase screen itself. `internal`, never `public`/Expo-visible.
@@ -108,19 +122,36 @@ struct WalletBackupPhraseView: View {
     @StateObject private var viewModel = WalletBackupPhraseViewModel()
     @Environment(\.scenePhase) private var scenePhase
     @State private var isBeingCaptured = false
+    /// Stage 5E.9D: local flow state — which step of the native backup
+    /// flow this presentation is currently showing. `false` (phrase
+    /// display) is always the entry state; Continue below is the only
+    /// thing that sets it `true`. Reset back to `false` on every
+    /// disappearance/backgrounding alongside `viewModel.clearPhrase()`
+    /// (below), so re-foregrounding or re-presenting always starts back
+    /// at the phrase screen rather than silently resuming mid-verification
+    /// with stale state — this is the "smallest local flow enum/state"
+    /// mechanism this stage's own instruction prefers over a
+    /// `NavigationStack`/broader navigation architecture.
+    @State private var isVerifying = false
 
-    /// Placeholder-only in this stage: invoked when the user taps the
-    /// bottom action button. Does NOT persist any "backup confirmed"
-    /// state — that, along with real onboarding wiring, is explicitly out
-    /// of scope here (a later stage). Unchanged by Stage 5E.7B's restyle.
+    /// Invoked exactly once — only after the user successfully completes
+    /// native backup verification (Stage 5E.9D; see
+    /// `WalletBackupVerificationView`'s `onVerified`). No longer invoked
+    /// directly by this screen's own Continue button (that changed in
+    /// Stage 5E.9D — see `ctaButton` below); its meaning to
+    /// `WalletBackupPhrasePresenter`, which resumes its Stage 5E.8
+    /// continuation from this exact closure, is unchanged: "this entire
+    /// native backup flow is finished, dismiss and let RN proceed." Does
+    /// NOT persist any "backup confirmed" state itself — that write
+    /// happens inside `WalletBackupVerificationView`, immediately before
+    /// this closure is called on success.
     ///
     /// Dismissal: this screen still has no explicit close/back button —
-    /// the existing default modal presentation style (Stage 5E.4's
-    /// `WalletBackupPhrasePresenter`, unchanged) already supports
-    /// swipe-to-dismiss, which is the "existing... affordance already
-    /// supported by current presentation architecture" this stage's own
-    /// instruction permits reusing. No new dismiss/navigation logic was
-    /// added merely for appearance.
+    /// the existing full-screen modal presentation (Stage 5E.7F.1) has no
+    /// interactive swipe-to-dismiss gesture, so successful verification is
+    /// the only reachable way to dismiss this flow (see
+    /// `WalletBackupPhrasePresenter`'s own doc comment for the fuller
+    /// swipe-dismiss analysis).
     let onWrittenDown: () -> Void
 
     var body: some View {
@@ -129,12 +160,16 @@ struct WalletBackupPhraseView: View {
             content
         }
         .onAppear { viewModel.loadPhrase() }
-        .onDisappear { viewModel.clearPhrase() }
+        .onDisappear {
+            viewModel.clearPhrase()
+            isVerifying = false
+        }
         .onChange(of: scenePhase) { newPhase in
             if newPhase == .active {
                 viewModel.loadPhrase()
             } else {
                 viewModel.clearPhrase()
+                isVerifying = false
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIScreen.capturedDidChangeNotification)) { _ in
@@ -156,7 +191,22 @@ struct WalletBackupPhraseView: View {
             errorView
         case .loaded(let mnemonic):
             if isBeingCaptured {
+                // Stage 5E.9D: capture protection applies identically
+                // whether showing the phrase or verifying it — `isVerifying`
+                // is checked only in the branch below, so a recording
+                // detected mid-verification hides the verification screen
+                // (and its choice chips) exactly like it already hides the
+                // phrase grid, with no separate handling needed in
+                // `WalletBackupVerificationView` itself.
                 capturedPlaceholder
+            } else if isVerifying {
+                // Stage 5E.9D: `mnemonic` is the same `String` bound once
+                // by this `switch` case above — passed by reference (COW),
+                // not duplicated into a second buffer, exactly like
+                // `phraseView(mnemonic:)` below already documents for its
+                // own use of it. Only one canonical mnemonic copy is ever
+                // alive at a time during this native session.
+                WalletBackupVerificationView(mnemonic: mnemonic, onVerified: onWrittenDown)
             } else {
                 phraseView(mnemonic: mnemonic)
             }
@@ -326,12 +376,18 @@ struct WalletBackupPhraseView: View {
 
     private var ctaButton: some View {
         // Stage 5E.7E: "Continue" replaces "I've written it down" — this
-        // button does not yet persist any backup-confirmed state (see
+        // button does not persist any backup-confirmed state itself (see
         // `onWrittenDown`'s own doc comment above), so the old label
         // overstated what tapping it actually records. Text-only, no
         // decorative icon — unchanged from before this stage, which never
         // had one.
-        Button(action: onWrittenDown) {
+        //
+        // Stage 5E.9D: no longer calls `onWrittenDown` directly — it only
+        // transitions this same native presentation to
+        // `WalletBackupVerificationView` (`isVerifying = true`). The label
+        // stays accurate either way: "Continue" has always meant "move to
+        // the next required step," never "this is complete."
+        Button(action: { isVerifying = true }) {
             Text("Continue")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundColor(Palette.background)
