@@ -97,7 +97,10 @@ private enum Palette {
     static let text = Color.white
     static let textSecondary = Color(red: 0x8D / 255.0, green: 0x91 / 255.0, blue: 0x9B / 255.0)
     static let accentGold = Color(red: 0xC9 / 255.0, green: 0xA2 / 255.0, blue: 0x4B / 255.0)
-    static let border = Color.white.opacity(0.08)
+    // Stage 5E.7F: lightened 0.08 -> 0.06 for an extremely subtle word-cell
+    // border, per this stage's "lighter, not heavier" cell treatment. Only
+    // consumer is `wordCell`'s overlay stroke.
+    static let border = Color.white.opacity(0.06)
 }
 
 /// The backup-phrase screen itself. `internal`, never `public`/Expo-visible.
@@ -188,7 +191,14 @@ struct WalletBackupPhraseView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // Stage 5E.7E: centered on the full screen width (not the leading
+        // edge) to match the RN Create Wallet screen's shared center axis
+        // (logo / MOBILE WALLET / hero title all center on full screen
+        // width there, per Stage 5E.7D). `.frame(maxWidth: .infinity)`
+        // makes this VStack itself span the full available width so its
+        // `.center`-aligned children center against that width, not just
+        // against each other's intrinsic size.
+        VStack(alignment: .center, spacing: 10) {
             Image(systemName: "lock.shield")
                 .font(.system(size: 26, weight: .medium))
                 .foregroundColor(Palette.accentGold)
@@ -197,12 +207,22 @@ struct WalletBackupPhraseView: View {
             Text("Back up your wallet")
                 .font(.system(size: 22, weight: .bold))
                 .foregroundColor(Palette.text)
+                .multilineTextAlignment(.center)
 
             Text("Anyone who has these words can access your funds.\nNever share them with anyone.\nMobile Wallet cannot recover them for you.")
                 .font(.system(size: 14))
                 .foregroundColor(Palette.textSecondary)
+                .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                // Stage 5E.7F: capped to the same deliberate readable width
+                // as the RN Create Wallet hero description
+                // (`heroDescription`'s `maxWidth: 280` in
+                // create-wallet-screen.tsx), rather than wrapping against
+                // the full screen width — keeps the block compact and its
+                // line lengths balanced instead of looking stretched/wide.
+                .frame(maxWidth: 280)
         }
+        .frame(maxWidth: .infinity)
     }
 
     /// 6 rows × 2 columns, as specified. Every cell shares one structural
@@ -221,28 +241,45 @@ struct WalletBackupPhraseView: View {
     }
 
     private func wordCell(index: Int, word: Substring) -> some View {
-        HStack(spacing: 8) {
-            // Fixed width regardless of digit count (1 vs. 12) so every
-            // word starts at the same horizontal position within its cell.
-            Text("\(index + 1)")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(Palette.accentGold)
-                .frame(width: 20, alignment: .leading)
-
-            // Deliberately no `.textSelection(.enabled)` — SwiftUI `Text`
-            // is not selectable by default, and this must stay that way:
-            // enabling it would surface the system text-selection callout
-            // menu, which offers Copy — reintroducing exactly the
-            // clipboard exposure this screen must not have.
+        // Stage 5E.7E: number and word are two independent layers, not one
+        // HStack, so the number's width can never shift the word off the
+        // cell's true center. The word layer is `.frame(maxWidth: .infinity,
+        // alignment: .center)` against the *cell's* full content width, so
+        // its visual center is the cell's center regardless of digit count
+        // (1 vs. 12) or word length. The number layer is a separate
+        // full-width HStack with a trailing Spacer, anchoring it to the
+        // left edge without participating in the word's centering at all.
+        ZStack {
             Text(word)
                 .font(.system(size: 15, weight: .medium))
                 .foregroundColor(Palette.text)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            HStack {
+                Text("\(index + 1)")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(Palette.accentGold)
+                Spacer()
+            }
+
+            // Deliberately no `.textSelection(.enabled)` anywhere in this
+            // cell — SwiftUI `Text` is not selectable by default, and this
+            // must stay that way: enabling it would surface the system
+            // text-selection callout menu, which offers Copy — reintroducing
+            // exactly the per-word clipboard exposure this screen must not
+            // have (ADR-004 §6: no clipboard copy of the mnemonic, in whole
+            // or in part).
         }
-        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        // Stage 5E.7F: lighter cells — reduced minHeight/padding versus
+        // Stage 5E.7B/5E.7E (44/12/10 -> 40/10/8) to cut unnecessary
+        // internal empty space while staying comfortably readable/tappable.
+        // Surface, radius, and the independent-layer centering above are
+        // otherwise unchanged.
+        .frame(maxWidth: .infinity, minHeight: 40)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(Palette.surface)
         .overlay(
             RoundedRectangle(cornerRadius: 12)
@@ -252,23 +289,50 @@ struct WalletBackupPhraseView: View {
     }
 
     private var safetyNote: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "checkmark.shield")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(Palette.accentGold)
-                .accessibilityHidden(true)
-
+        // Stage 5E.7F.2: icon and text are independent ZStack layers — the
+        // same independent-layer strategy already used for word-cell
+        // number/word centering (Stage 5E.7E) — so the icon's width can
+        // never shift the text off the screen's center axis. The text
+        // layer is `.frame(maxWidth: .infinity, alignment: .center)`
+        // against this note's own full content width (which spans the
+        // word grid's width, per the outer `.frame` below), so its visual
+        // center is the screen's center, not "whatever's left after the
+        // icon." The icon is a separate full-width HStack with a trailing
+        // Spacer, anchoring it to the left edge without participating in
+        // the text's centering at all.
+        ZStack {
             (Text("Write these words down ").foregroundColor(Palette.textSecondary)
                 + Text("in order").foregroundColor(Palette.accentGold).fontWeight(.semibold)
                 + Text(" and store them somewhere safe.").foregroundColor(Palette.textSecondary))
                 .font(.system(size: 13))
+                .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            HStack {
+                Image(systemName: "checkmark.shield")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Palette.accentGold)
+                    .accessibilityHidden(true)
+                Spacer()
+            }
         }
+        // Stage 5E.7F: full width so this note's edges line up with the
+        // word grid's edges (both sit inside the same 20pt outer padding)
+        // rather than shrinking to its own content size — keeps it reading
+        // as inline supporting text, not a second card.
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var ctaButton: some View {
+        // Stage 5E.7E: "Continue" replaces "I've written it down" — this
+        // button does not yet persist any backup-confirmed state (see
+        // `onWrittenDown`'s own doc comment above), so the old label
+        // overstated what tapping it actually records. Text-only, no
+        // decorative icon — unchanged from before this stage, which never
+        // had one.
         Button(action: onWrittenDown) {
-            Text("I've written it down")
+            Text("Continue")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundColor(Palette.background)
                 .frame(maxWidth: .infinity)
@@ -277,7 +341,7 @@ struct WalletBackupPhraseView: View {
                 .cornerRadius(14)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("I've written it down")
+        .accessibilityLabel("Continue")
     }
 
     private var errorView: some View {

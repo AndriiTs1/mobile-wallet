@@ -50,6 +50,11 @@ enum WalletBackupPhrasePresenter {
             hostingController?.dismiss(animated: true)
         })
         let controller = UIHostingController(rootView: backupView)
+        // Stage 5E.7F.1: without this, an unset `modalPresentationStyle`
+        // defaults to `.automatic` on iOS 13+, which resolves to a page
+        // sheet (rounded top corners, inset/shrunk card, presenting view
+        // visible behind it) — not the approved full-screen design.
+        controller.modalPresentationStyle = .fullScreen
         hostingController = controller
 
         Self.topMostViewController(from: rootViewController).present(controller, animated: true)
