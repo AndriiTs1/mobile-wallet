@@ -7,6 +7,7 @@ import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AppLockScreen } from '@/components/app-lock-screen';
 import AppTabs from '@/components/app-tabs';
 import { CreateWalletScreen } from '@/components/create-wallet-screen';
+import { PrivacyCover } from '@/components/privacy-cover';
 import { Colors } from '@/constants/theme';
 import { MarketDataProvider } from '@/providers/market-data-provider';
 import {
@@ -232,6 +233,10 @@ function AppLockGate({ children }: { children: ReactNode }) {
   // Ephemeral only: a plain in-memory timestamp, never persisted, cleared
   // on every read.
   const backgroundedAtRef = useRef<number | null>(null);
+  // Stage 5F.5B: whether the app-switcher privacy cover is currently
+  // shown. Ephemeral `useState` only — never persisted, never read by or
+  // connected to any authentication logic (see the listener below).
+  const [isPrivacyCoverVisible, setIsPrivacyCoverVisible] = useState(false);
 
   /**
    * Stage 5F.5A: re-arms/evaluates the background grace period. Reads and
@@ -243,18 +248,45 @@ function AppLockGate({ children }: { children: ReactNode }) {
    * `'unlocked'` back to `'locked'`, which that other effect then picks up
    * on its own next run.
    *
-   * Deliberately ignores `'inactive'` entirely — that iOS state fires
-   * constantly for reasons that are not "the user left the app" (Control
-   * Center, an incoming-call banner, the app switcher preview, and,
-   * critically, the native Face ID/passcode sheet itself). Reacting to it
-   * here would both over-trigger on trivial interruptions and risk a
-   * Face-ID prompt loop (sheet appears -> 'inactive' -> mistaken for
-   * backgrounding -> re-lock -> sheet dismisses -> 'active' -> immediate
-   * re-auth again). Only a confirmed 'background' entry arms the clock;
-   * only a confirmed 'active' entry evaluates it.
+   * The re-lock policy deliberately ignores `'inactive'` for its OWN
+   * purposes — that iOS state fires constantly for reasons that are not
+   * "the user left the app" (Control Center, an incoming-call banner, the
+   * app switcher preview, and, critically, the native Face ID/passcode
+   * sheet itself). Reacting to it for re-lock timing would both
+   * over-trigger on trivial interruptions and risk a Face-ID prompt loop
+   * (sheet appears -> 'inactive' -> mistaken for backgrounding -> re-lock
+   * -> sheet dismisses -> 'active' -> immediate re-auth again). Only a
+   * confirmed 'background' entry arms the re-lock clock; only a confirmed
+   * 'active' entry evaluates it — this part is completely unchanged from
+   * Stage 5F.5A.
+   *
+   * Stage 5F.5B extends this SAME listener (deliberately not a second,
+   * competing subscription) with an independent, one-directional concern:
+   * the app-switcher privacy cover. `'inactive'` IS the correct earliest
+   * signal for this purpose (unlike for re-lock timing) — it is the
+   * documented point at which iOS begins capturing the multitasking
+   * snapshot, so the cover must appear here, unconditionally, regardless
+   * of cause or eventual duration. The cover branch only ever calls
+   * `setIsPrivacyCoverVisible` — never `setPhase`, never
+   * `requestAppUnlock()`, never touches `backgroundedAtRef`/
+   * `unlockInFlightRef`/`isFirstAttemptRef` — so it cannot create a
+   * duplicate/overlapping authentication call or interfere with the
+   * re-lock state machine in either direction. On `'active'`, the cover is
+   * cleared unconditionally in the SAME synchronous callback as any
+   * `setPhase` call below: React batches both into one render, so
+   * whichever branch `AppLockGate`'s own render takes afterward — restored
+   * `children`, because the grace period was intact, or `AppLockScreen`'s
+   * own shield-only presentation, because `setPhase` just re-armed
+   * `'locked'` — is already the correct, safe thing to reveal. There is
+   * never a frame where the cover is gone but the wrong content is
+   * showing.
    */
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'inactive') {
+        setIsPrivacyCoverVisible(true);
+        return;
+      }
       if (nextState === 'background') {
         if (phase.phase === 'unlocked') {
           backgroundedAtRef.current = Date.now();
@@ -262,9 +294,9 @@ function AppLockGate({ children }: { children: ReactNode }) {
         return;
       }
       if (nextState !== 'active') {
-        // 'inactive' — ignored, see doc comment above.
         return;
       }
+      setIsPrivacyCoverVisible(false);
       if (phase.phase !== 'unlocked') {
         return;
       }
@@ -297,13 +329,23 @@ function AppLockGate({ children }: { children: ReactNode }) {
   }, []);
 
   if (phase.phase === 'noLockNeeded' || phase.phase === 'unlocked') {
-    return <>{children}</>;
+    return (
+      <>
+        {children}
+        {isPrivacyCoverVisible ? <PrivacyCover /> : null}
+      </>
+    );
   }
   // 'locked' (holding, or about to issue a call) renders shield-only;
   // 'authenticating' (call in flight) adds the title/spinner; only
   // 'authError' shows the title/message/retry affordance.
   const variant = phase.phase === 'authError' ? 'error' : phase.phase === 'authenticating' ? 'authenticating' : 'holding';
-  return <AppLockScreen variant={variant} onRetry={handleRetry} />;
+  return (
+    <>
+      <AppLockScreen variant={variant} onRetry={handleRetry} />
+      {isPrivacyCoverVisible ? <PrivacyCover /> : null}
+    </>
+  );
 }
 
 /**

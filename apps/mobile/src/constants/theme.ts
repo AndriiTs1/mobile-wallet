@@ -74,3 +74,11 @@ export const Spacing = {
 // clear of the floating bar on its own.
 export const BottomTabInset = Platform.select({ ios: 24, android: 80 }) ?? 0;
 export const MaxContentWidth = 800;
+
+// Single source of truth for the shield/logo width shown across the whole
+// cold-launch / App Lock chain (native launch screen, AnimatedSplashOverlay,
+// AppLockScreen, PrivacyCover) — must stay visually one consistent size
+// across that handoff. Matches app.json's expo-splash-screen `imageWidth`.
+// The native Swift PrivacyCover mirrors this value independently (Swift
+// can't import this constant) — keep both in sync if this ever changes.
+export const ShieldLogoSize = 76;

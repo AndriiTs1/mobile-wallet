@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ShieldMark } from '@/components/shield-mark';
-import { Colors, Spacing } from '@/constants/theme';
+import { Colors, ShieldLogoSize, Spacing } from '@/constants/theme';
 
 const palette = Colors.dark;
 
@@ -42,7 +42,7 @@ export function AppLockScreen({ variant, onRetry }: AppLockScreenProps) {
   return (
     <View style={styles.container}>
       <View style={styles.content}>
-        <ShieldMark size={40} />
+        <ShieldMark size={ShieldLogoSize} />
         {variant === 'error' ? (
           <>
             <Text style={styles.title}>Unlock Mobile Wallet</Text>

@@ -23,7 +23,12 @@ final class WalletAppLockGateTests: XCTestCase {
         let renderStart = try XCTUnwrap(source.range(of: "if (phase.phase === 'noLockNeeded' || phase.phase === 'unlocked') {"))
         let closeRange = try XCTUnwrap(source.range(of: "\n  }", range: renderStart.upperBound..<source.endIndex))
         let branch = source[renderStart.upperBound..<closeRange.lowerBound]
-        XCTAssertTrue(branch.contains("return <>{children}</>;"))
+        // Stage 5F.5B wrapped this branch's return in a fragment (to also
+        // layer the privacy cover on top — see the dedicated PrivacyCover
+        // tests below), so the exact literal `return <>{children}</>;` no
+        // longer appears verbatim; `{children}` itself is still the
+        // underlying, unweakened property this test proves.
+        XCTAssertTrue(branch.contains("{children}"))
     }
 
     // MARK: - B: hasWallet() == true does not mount children before unlock
@@ -35,7 +40,7 @@ final class WalletAppLockGateTests: XCTestCase {
         // 'locked', which the ternary above sets when hasWallet() is true
         // — falls through to AppLockScreen instead.
         XCTAssertTrue(source.contains("if (phase.phase === 'noLockNeeded' || phase.phase === 'unlocked') {"))
-        XCTAssertTrue(source.contains("return <AppLockScreen"))
+        XCTAssertTrue(source.contains("<AppLockScreen variant={variant} onRetry={handleRetry} />"))
     }
 
     // MARK: - C: hasWallet() read failure fails closed
@@ -157,47 +162,144 @@ final class WalletAppLockGateTests: XCTestCase {
     func testNoPersistedAuthState() throws {
         let layoutSource = try mobileAppSource(at: "src/app/_layout.tsx")
         let lockScreenSource = try mobileAppSource(at: "src/components/app-lock-screen.tsx")
+        let privacyCoverSource = try mobileAppSource(at: "src/components/privacy-cover.tsx")
         for term in ["AsyncStorage", "SecureStore", "UserDefaults", "localStorage"] {
             XCTAssertFalse(layoutSource.contains(term), "_layout.tsx must not contain \(term)")
             XCTAssertFalse(lockScreenSource.contains(term), "app-lock-screen.tsx must not contain \(term)")
+            XCTAssertFalse(privacyCoverSource.contains(term), "privacy-cover.tsx must not contain \(term)")
         }
     }
 
-    // MARK: - K (superseded by Stage 5F.5A): AppState usage scoped to the
-    // approved re-lock listener only
+    // MARK: - K (superseded by Stage 5F.5B): AppState usage scoped to the
+    // approved re-lock + privacy-cover listener only
 
-    /// Stage 5F.4B/5F.4C asserted `AppState`/`addEventListener(` were absent
-    /// entirely — correct before any lifecycle re-lock existed. Stage 5F.5A
-    /// intentionally supersedes that: `AppState.addEventListener` is now
-    /// legitimately used, exactly once, for the background/foreground
-    /// re-lock listener. This re-expresses the still-valid part of the old
-    /// invariant: that listener may only ever call `setPhase` — never
-    /// `requestAppUnlock()` directly (all actual native calls remain
-    /// funneled through the pre-existing single-flight effect) — and it
-    /// must never inspect `'inactive'`, only `'background'`/`'active'`
-    /// (see this stage's own Face-ID-loop analysis). `setInterval`, a
-    /// recurring/second timer, and timestamp-comparison logic outside this
-    /// one listener still do not exist anywhere.
-    func testAppStateUsageIsScopedToTheApprovedReLockListenerOnly() throws {
+    /// Stage 5F.5A asserted `'inactive'` was never inspected — correct
+    /// before any privacy cover existed. Stage 5F.5B intentionally
+    /// supersedes that: `'inactive'` IS now inspected, but ONLY inside the
+    /// SAME single `AppState.addEventListener` subscription (never a
+    /// second, competing one), and ONLY to toggle the privacy cover — it
+    /// must never call `requestAppUnlock()`, `setPhase`, or touch any of
+    /// the re-lock refs (`backgroundedAtRef`/`unlockInFlightRef`/
+    /// `isFirstAttemptRef`), so it cannot create a duplicate/overlapping
+    /// authentication call or interfere with re-lock in either direction.
+    /// `setInterval`, a recurring/second timer, and timestamp-comparison
+    /// logic outside this one listener still do not exist anywhere.
+    func testAppStateUsageIsScopedToTheApprovedReLockAndCoverListenerOnly() throws {
         let source = try mobileAppSource(at: "src/app/_layout.tsx")
 
         let occurrences = source.components(separatedBy: "AppState.addEventListener(").count - 1
-        XCTAssertEqual(occurrences, 1, "AppState.addEventListener must be called exactly once")
+        XCTAssertEqual(occurrences, 1, "AppState.addEventListener must be called exactly once — 5F.5B extends it, never adds a second one")
 
         let listenerStart = try XCTUnwrap(source.range(of: "AppState.addEventListener('change', (nextState) => {"))
         let listenerEnd = try XCTUnwrap(source.range(of: "\n    });", range: listenerStart.upperBound..<source.endIndex))
         let listenerBody = source[listenerStart.upperBound..<listenerEnd.lowerBound]
 
         XCTAssertFalse(listenerBody.contains("requestAppUnlock("), "the AppState listener must never call requestAppUnlock() directly")
-        XCTAssertFalse(listenerBody.contains("'inactive'"), "'inactive' must never be inspected by the re-lock listener")
         XCTAssertTrue(listenerBody.contains("nextState === 'background'"))
         XCTAssertTrue(listenerBody.contains("nextState !== 'active'"))
+
+        // The 'inactive' branch specifically: bounded to prove it does
+        // nothing beyond toggling the privacy cover.
+        let inactiveStart = try XCTUnwrap(listenerBody.range(of: "if (nextState === 'inactive') {"))
+        let inactiveEnd = try XCTUnwrap(listenerBody.range(of: "\n      }", range: inactiveStart.upperBound..<listenerBody.endIndex))
+        let inactiveBody = listenerBody[inactiveStart.upperBound..<inactiveEnd.lowerBound]
+        XCTAssertTrue(inactiveBody.contains("setIsPrivacyCoverVisible(true);"))
+        for term in ["setPhase(", "backgroundedAtRef", "unlockInFlightRef", "isFirstAttemptRef", "requestAppUnlock"] {
+            XCTAssertFalse(inactiveBody.contains(term), "the 'inactive' branch must not touch \(term)")
+        }
 
         let lockScreenSource = try mobileAppSource(at: "src/components/app-lock-screen.tsx")
         XCTAssertFalse(lockScreenSource.contains("AppState"))
         for term in ["addEventListener(", "setInterval(", "foreground"] {
             XCTAssertFalse(lockScreenSource.contains(term), "app-lock-screen.tsx must not contain \(term)")
         }
+    }
+
+    // MARK: - U: the privacy cover clears unconditionally, in the same
+    // synchronous callback as any re-lock decision
+
+    /// Proves the core "no Home flash" property: on 'active', the cover is
+    /// cleared BEFORE the grace-period-specific logic runs, unconditionally
+    /// (not gated on the grace-period outcome) — so React batches the
+    /// cover-clear and any resulting `setPhase({ phase: 'locked' })` into
+    /// one render. Whichever branch `AppLockGate` takes in that render
+    /// (restored `children`, or `AppLockScreen`'s own shield-only
+    /// presentation) is already correct to reveal; there is no
+    /// intermediate frame where the cover is gone but the wrong content is
+    /// showing.
+    func testPrivacyCoverClearsUnconditionallyBeforeGraceEvaluation() throws {
+        let source = try mobileAppSource(at: "src/app/_layout.tsx")
+        let listenerStart = try XCTUnwrap(source.range(of: "AppState.addEventListener('change', (nextState) => {"))
+        let listenerEnd = try XCTUnwrap(source.range(of: "\n    });", range: listenerStart.upperBound..<source.endIndex))
+        let listenerBody = source[listenerStart.upperBound..<listenerEnd.lowerBound]
+
+        let activeGuardRange = try XCTUnwrap(listenerBody.range(of: "if (nextState !== 'active') {"))
+        let clearCoverRange = try XCTUnwrap(
+            listenerBody.range(of: "setIsPrivacyCoverVisible(false);", range: activeGuardRange.upperBound..<listenerBody.endIndex)
+        )
+        let graceGuardRange = try XCTUnwrap(
+            listenerBody.range(of: "if (phase.phase !== 'unlocked') {", range: activeGuardRange.upperBound..<listenerBody.endIndex)
+        )
+        XCTAssertTrue(clearCoverRange.lowerBound < graceGuardRange.lowerBound, "the cover must clear before the grace-period evaluation, not after/inside it")
+
+        // Exactly one unconditional clear — never a second, conditional one.
+        let occurrences = listenerBody.components(separatedBy: "setIsPrivacyCoverVisible(false)").count - 1
+        XCTAssertEqual(occurrences, 1)
+    }
+
+    // MARK: - V: PrivacyCover is dark background + centered shield only
+
+    func testPrivacyCoverIsDarkBackgroundAndCenteredShieldOnly() throws {
+        let source = try mobileAppSource(at: "src/components/privacy-cover.tsx")
+
+        let shieldOccurrences = source.components(separatedBy: "<ShieldMark").count - 1
+        XCTAssertEqual(shieldOccurrences, 1, "exactly one ShieldMark, always present")
+        XCTAssertTrue(source.contains("backgroundColor: palette.background"))
+
+        for term in ["Text", "ActivityIndicator", "Pressable", "TextInput"] {
+            XCTAssertFalse(source.contains(term), "PrivacyCover must not reference \(term) — no text, no spinner, nothing interactive")
+        }
+    }
+
+    // MARK: - W: PrivacyCover contains no wallet data and is not an auth
+    // boundary
+
+    func testPrivacyCoverContainsNoWalletDataOrAuthLogic() throws {
+        let source = try mobileAppSource(at: "src/components/privacy-cover.tsx")
+        for term in [
+            "mnemonic", "entropy", "seed", "privateKey", "xpriv",
+            "balance", "address", "asset", "activity", "wallet-core-bridge",
+            "requestAppUnlock", "AppLockPhase", "setPhase",
+            "AsyncStorage", "SecureStore", "UserDefaults",
+        ] {
+            XCTAssertNil(
+                source.range(of: term, options: .caseInsensitive),
+                "privacy-cover.tsx must not reference \(term)"
+            )
+        }
+    }
+
+    // MARK: - X: PrivacyCover is only reachable inside AppLockGate, never
+    // Showcase Mode
+
+    func testPrivacyCoverIsScopedInsideAppLockGateNeverShowcaseMode() throws {
+        let source = try mobileAppSource(at: "src/app/_layout.tsx")
+
+        let occurrences = source.components(separatedBy: "<PrivacyCover").count - 1
+        XCTAssertEqual(occurrences, 2, "PrivacyCover is rendered from exactly the two AppLockGate return branches")
+
+        let gateStart = try XCTUnwrap(source.range(of: "function AppLockGate("))
+        let gateEnd = try XCTUnwrap(source.range(of: "\n}", range: gateStart.upperBound..<source.endIndex))
+        let gateBody = source[gateStart.upperBound..<gateEnd.lowerBound]
+        XCTAssertEqual(
+            gateBody.components(separatedBy: "<PrivacyCover").count - 1, 2,
+            "both PrivacyCover render sites must live inside AppLockGate"
+        )
+
+        let showcaseStart = try XCTUnwrap(source.range(of: "function ShowcaseCreateWalletGate("))
+        let showcaseEnd = try XCTUnwrap(source.range(of: "\n}", range: showcaseStart.upperBound..<source.endIndex))
+        let showcaseBody = source[showcaseStart.upperBound..<showcaseEnd.lowerBound]
+        XCTAssertFalse(showcaseBody.contains("PrivacyCover"))
     }
 
     // MARK: - R: the grace-period threshold correctly gates re-lock
@@ -239,29 +341,6 @@ final class WalletAppLockGateTests: XCTestCase {
         )
     }
 
-    // MARK: - T: snapshot privacy is explicitly deferred to Stage 5F.5B
-
-    func testSnapshotPrivacyIsExplicitlyDeferredToStage5F5B() throws {
-        // Stage 5F.5A is lifecycle re-lock only. App-switcher snapshot
-        // privacy (a cosmetic cover, unconditional on the grace-period
-        // timer, never a substitute for this structural re-lock gate) is
-        // deliberately NOT implemented here — per the Stage 5F.5
-        // pre-implementation audit's own recommendation to split into a
-        // separately named Stage 5F.5B. This documents that deferral
-        // explicitly; update (never silently delete) once 5F.5B lands.
-        let componentsDir = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // Tests/
-            .deletingLastPathComponent() // ios/
-            .deletingLastPathComponent() // wallet-core-bridge/
-            .deletingLastPathComponent() // modules/
-            .deletingLastPathComponent() // apps/mobile/
-            .appendingPathComponent("src/components")
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: componentsDir.path)) ?? []
-        XCTAssertFalse(
-            names.contains { $0.lowercased().contains("privacy") || $0.lowercased().contains("snapshot") },
-            "no snapshot-privacy cover component is expected yet — deferred to Stage 5F.5B"
-        )
-    }
 
     // MARK: - N: the initial cold-launch attempt is held for 1000ms
 

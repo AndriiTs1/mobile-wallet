@@ -32,8 +32,8 @@
         "expo-splash-screen",
         {
           "backgroundColor": "#0A0B0F",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "image": "./assets/images/shield-mark@3x.png",
+          "imageWidth": 90
         }
       ],
       "./plugins/withWalletCoreBridgeTestSpec.js"

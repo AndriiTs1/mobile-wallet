@@ -5,6 +5,9 @@ import { Dimensions, StyleSheet, View } from 'react-native';
 import Animated, { Easing, Keyframe } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
+import { ShieldMark } from '@/components/shield-mark';
+import { ShieldLogoSize } from '@/constants/theme';
+
 const INITIAL_SCALE_FACTOR = Dimensions.get('screen').height / 90;
 const DURATION = 600;
 
@@ -33,7 +36,16 @@ export function AnimatedSplashOverlay() {
     },
   });
 
-  const image = <Image style={styles.image} source={require('@/assets/images/splash-icon.png')} />;
+  // `shield-mark.png` (via `ShieldMark`), not `splash-icon.png`: the latter
+  // bakes in ~11% transparent padding around the shield artwork, and
+  // `expo-image`'s default `contentFit` ('cover') scales that padding
+  // along with the glyph — the visible shield ends up ~22% smaller than
+  // its declared box. `ShieldMark` uses the zero-padding source already
+  // proven, by direct alpha-bounding-box measurement, to render at exactly
+  // its declared size — the same canonical artwork/geometry as
+  // `AppLockScreen`/`PrivacyCover`/the native launch screen and privacy
+  // cover, so there is no visible size jump across the cold-launch chain.
+  const image = <ShieldMark size={ShieldLogoSize} />;
 
   return animate ? (
     <Animated.View
@@ -128,7 +140,7 @@ const styles = StyleSheet.create({
     zIndex: 100,
   },
   image: {
-    width: 76,
+    width: ShieldLogoSize,
     height: 90,
   },
   background: {
