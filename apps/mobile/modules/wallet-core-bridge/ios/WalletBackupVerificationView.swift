@@ -279,32 +279,28 @@ struct WalletBackupVerificationView: View {
     }
 
     private var errorBanner: some View {
-        // Stage 5E.9E3: bordered/tinted card — "clearly visible," not just
-        // technically present. Title/body/icon carry the meaning (not
-        // color alone); the attempt counter is deliberately muted
-        // secondary text, not red/punitive — this is a comprehension
-        // check, not a security lockout.
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 14, weight: .medium))
+        // UI-only polish pass: the visible card now shows only the title
+        // and the attempt-counter line, centered and compact — no icon, no
+        // body copy, no left alignment. Same bordered/tinted card, same
+        // `Palette.negative`/`textSecondary` usage as before; nothing about
+        // retry logic or `failedAttempts` changes here. `genericFailureBody`
+        // is intentionally not rendered here anymore, but remains used by
+        // the VoiceOver announcement in `.onChange(of: showError)` above,
+        // so VoiceOver users still get the fuller guidance even though the
+        // on-screen card is shorter.
+        VStack(alignment: .center, spacing: 4) {
+            Text(Self.genericFailureTitle)
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(Palette.negative)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(Self.genericFailureTitle)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(Palette.negative)
-                Text(Self.genericFailureBody)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(Palette.negative)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(remainingAttemptsText)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(Palette.textSecondary)
-            }
+                .multilineTextAlignment(.center)
+            Text(remainingAttemptsText)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(Palette.textSecondary)
+                .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
         .background(Palette.negative.opacity(0.12))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
