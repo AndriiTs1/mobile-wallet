@@ -94,7 +94,17 @@ enum WalletSecureStorage {
             throw WalletSecureStorageError.secureHardwareUnavailable
         }
 
-        if (try? readEnvelopeData()) != nil {
+        // Only `.itemNotFound` means "absent" — any other error (a real
+        // Keychain/Secure Enclave failure) must propagate, not be silently
+        // treated as "no existing item" (Stage 5D.6 review finding).
+        let envelopeAlreadyExists: Bool
+        do {
+            _ = try readEnvelopeData()
+            envelopeAlreadyExists = true
+        } catch WalletSecureStorageError.itemNotFound {
+            envelopeAlreadyExists = false
+        }
+        if envelopeAlreadyExists {
             throw WalletSecureStorageError.itemAlreadyExists
         }
 
@@ -186,8 +196,14 @@ enum WalletSecureStorage {
     // MARK: - Secure Enclave key lifecycle
 
     private static func loadOrCreateEnclaveKey() throws -> SecureEnclave.P256.KeyAgreement.PrivateKey {
-        if let existing = try? loadEnclaveKey() {
-            return existing
+        // Only `.itemNotFound` means "no key yet, create one" — a corrupted
+        // reference, hardware failure, or other real error must propagate,
+        // never silently trigger generating a replacement key (Stage 5D.6
+        // review finding).
+        do {
+            return try loadEnclaveKey()
+        } catch WalletSecureStorageError.itemNotFound {
+            // Absent — fall through to create a new Secure Enclave key.
         }
 
         var accessControlError: Unmanaged<CFError>?

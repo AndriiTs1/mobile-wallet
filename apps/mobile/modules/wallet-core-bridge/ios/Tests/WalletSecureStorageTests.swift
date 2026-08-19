@@ -77,6 +77,36 @@ final class WalletSecureStorageTests: XCTestCase {
         )
     }
 
+    func testDeleteOnEmptyStorageIsIdempotent() throws {
+        try skipIfSecureEnclaveUnavailable()
+
+        // Nothing stored (setUp already cleared any leftover item) — delete
+        // must not throw.
+        XCTAssertNoThrow(try WalletSecureStorage.delete())
+    }
+
+    func testCorruptedEnclaveKeyReferenceIsNotTreatedAsAbsent() throws {
+        try skipIfSecureEnclaveUnavailable()
+
+        // Seeds a garbage value under the Secure Enclave key's own Keychain
+        // account (same test-only raw-Keychain-write pattern already used
+        // for envelope corruption below) so `loadEnclaveKey()` succeeds at
+        // the Keychain *read* but fails to reconstruct a
+        // SecureEnclave.P256.KeyAgreement.PrivateKey from the bytes — a
+        // real, non-`.itemNotFound` error (mapped to `.corruptEnvelope`).
+        // This proves `loadOrCreateEnclaveKey()`'s Stage 5D.7 semantics:
+        // such an error must propagate, never be silently treated as
+        // "no key yet, generate a replacement" (the Stage 5D.6 review
+        // finding this stage fixes). No production visibility is widened —
+        // this only reuses the existing raw-Keychain-write technique against
+        // a different, already-known account name.
+        try rawWriteKeyReferenceData(Data([0xFF, 0xFF, 0xFF, 0xFF]))
+
+        XCTAssertThrowsError(try WalletSecureStorage.store(data: syntheticBytes)) { error in
+            XCTAssertEqual(error as? WalletSecureStorageError, .corruptEnvelope)
+        }
+    }
+
     func testSecureHardwareUnavailableIsReportedStructurally() throws {
         // `SecureEnclave.isAvailable` is NOT reliably false on Simulator —
         // verified empirically (Stage 5D.6B report §L): on this Apple
@@ -124,6 +154,20 @@ final class WalletSecureStorageTests: XCTestCase {
             return Data()
         }
         return data
+    }
+
+    /// Writes raw bytes directly under the Secure Enclave key's own Keychain
+    /// account — test-only, same duplicated-identifier rationale as
+    /// `rawReadEnvelopeData` above. Used only to seed a deliberately
+    /// unparseable key reference for `testCorruptedEnclaveKeyReferenceIsNotTreatedAsAbsent`.
+    private func rawWriteKeyReferenceData(_ data: Data) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.swisswallet.WalletSecureStorage.prototype",
+            kSecAttrAccount as String: "secureEnclaveKey",
+            kSecValueData as String: data,
+        ]
+        XCTAssertEqual(SecItemAdd(query as CFDictionary, nil), errSecSuccess)
     }
 
     private func rawUpdateEnvelopeData(_ data: Data) throws {
