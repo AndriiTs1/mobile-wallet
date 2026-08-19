@@ -58,12 +58,12 @@ final class WalletAppLockGateTests: XCTestCase {
 
         let callSite = try XCTUnwrap(source.range(of: "requestAppUnlock()"))
         let thenRange = try XCTUnwrap(source.range(of: ".then(() => {", range: callSite.upperBound..<source.endIndex))
-        let thenClose = try XCTUnwrap(source.range(of: "\n      })", range: thenRange.upperBound..<source.endIndex))
+        let thenClose = try XCTUnwrap(source.range(of: "\n        })", range: thenRange.upperBound..<source.endIndex))
         let thenBody = source[thenRange.upperBound..<thenClose.lowerBound]
         XCTAssertTrue(thenBody.contains("{ phase: 'unlocked' }"))
 
         let catchRange = try XCTUnwrap(source.range(of: ".catch(() => {", range: thenClose.upperBound..<source.endIndex))
-        let catchClose = try XCTUnwrap(source.range(of: "\n      });", range: catchRange.upperBound..<source.endIndex))
+        let catchClose = try XCTUnwrap(source.range(of: "\n        });", range: catchRange.upperBound..<source.endIndex))
         let catchBody = source[catchRange.upperBound..<catchClose.lowerBound]
         XCTAssertFalse(catchBody.contains("unlocked"))
         XCTAssertTrue(catchBody.contains("{ phase: 'authError' }"))
@@ -160,15 +160,126 @@ final class WalletAppLockGateTests: XCTestCase {
         }
     }
 
-    // MARK: - K: no AppState/background-foreground/grace-period/timer logic
+    // MARK: - K (superseded by Stage 5F.4C): no AppState/background-foreground/
+    // grace-period/recurring-timer logic
 
-    func testNoAppStateBackgroundForegroundGracePeriodOrTimerLogic() throws {
+    /// Stage 5F.4B asserted `setTimeout(` was absent entirely — correct
+    /// before any cold-launch timing gate existed. Stage 5F.4C intentionally
+    /// supersedes that: exactly one `setTimeout(` now exists, as a one-shot
+    /// UX hold around the FIRST `requestAppUnlock()` call only (see tests
+    /// N/O below) — never a recurring/backgrounding-oriented timer, and
+    /// never `AppState`/lifecycle-driven. This re-expresses the still-valid
+    /// part of the old invariant: no `AppState`, event-listener-based
+    /// background/foreground detection, `setInterval`, or timestamp-based
+    /// grace-period logic exists anywhere.
+    func testNoAppStateOrBackgroundForegroundLifecycleLogic() throws {
         let layoutSource = try mobileAppSource(at: "src/app/_layout.tsx")
         let lockScreenSource = try mobileAppSource(at: "src/components/app-lock-screen.tsx")
-        for term in ["AppState", "addEventListener(", "setTimeout(", "setInterval(", "Date.now(", "foreground"] {
+        for term in ["AppState", "addEventListener(", "setInterval(", "Date.now(", "foreground"] {
             XCTAssertFalse(layoutSource.contains(term), "_layout.tsx must not contain \(term)")
             XCTAssertFalse(lockScreenSource.contains(term), "app-lock-screen.tsx must not contain \(term)")
         }
+    }
+
+    // MARK: - N: the initial cold-launch attempt is held for 1000ms
+
+    func testInitialColdLaunchAttemptIsHeldForOneThousandMilliseconds() throws {
+        let source = try mobileAppSource(at: "src/app/_layout.tsx")
+        XCTAssertTrue(source.contains("const INITIAL_UNLOCK_HOLD_MS = 1000;"))
+
+        // Exactly one setTimeout call site in the whole file — the
+        // cold-launch hold — never a recurring/backgrounding-oriented
+        // timer, and it is cleaned up on early unmount/dependency change.
+        let occurrences = source.components(separatedBy: "setTimeout(").count - 1
+        XCTAssertEqual(occurrences, 1, "exactly one setTimeout() call site is expected — the cold-launch hold")
+        XCTAssertTrue(source.contains("setTimeout(beginAuthentication, INITIAL_UNLOCK_HOLD_MS)"))
+        XCTAssertTrue(source.contains("clearTimeout(timer)"))
+    }
+
+    // MARK: - P: initial pre-auth presentation is shield-only
+
+    func testInitialPreAuthPresentationIsShieldOnly() throws {
+        let layoutSource = try mobileAppSource(at: "src/app/_layout.tsx")
+        // 'locked' (the phase held for INITIAL_UNLOCK_HOLD_MS, and the
+        // phase a retry also transiently passes through before its
+        // immediate re-authentication) must map to the 'holding' variant —
+        // never 'authenticating' or 'error' — for both the initial hold and
+        // any later re-entry, so the pre-auth screen is always shield-only.
+        XCTAssertTrue(layoutSource.contains(
+            "const variant = phase.phase === 'authError' ? 'error' : phase.phase === 'authenticating' ? 'authenticating' : 'holding';"
+        ))
+
+        let lockScreenSource = try mobileAppSource(at: "src/components/app-lock-screen.tsx")
+        XCTAssertTrue(lockScreenSource.contains("variant !== 'holding'"), "non-holding content must be gated behind a variant check")
+
+        // Bounded: the JSX guarded by that check is the ONLY place the
+        // title/spinner/message/retry button are ever rendered — 'holding'
+        // itself renders nothing beyond the single, always-present
+        // ShieldMark.
+        let guardStart = try XCTUnwrap(lockScreenSource.range(of: "variant !== 'holding' ? ("))
+        let shieldMarkRange = try XCTUnwrap(lockScreenSource.range(of: "<ShieldMark"))
+        XCTAssertTrue(shieldMarkRange.upperBound < guardStart.lowerBound, "ShieldMark must render unconditionally, before the variant-gated content")
+
+        // Bounded to the render body only (ShieldMark through the variant
+        // guard) — deliberately excludes the top-of-file `import {
+        // ActivityIndicator, ... }` statement, which legitimately names
+        // these identifiers without rendering them.
+        let renderBodyBeforeGuard = lockScreenSource[shieldMarkRange.upperBound..<guardStart.lowerBound]
+        for term in ["Unlock Mobile Wallet", "ActivityIndicator", "Authentication was cancelled", "Try Again"] {
+            XCTAssertFalse(renderBodyBeforeGuard.contains(term), "\(term) must not render unconditionally / outside the non-holding branch")
+        }
+    }
+
+    // MARK: - Q: authError still renders the existing title/message/retry UI
+
+    func testAuthErrorStillRendersExistingRetryUI() throws {
+        let layoutSource = try mobileAppSource(at: "src/app/_layout.tsx")
+        XCTAssertTrue(layoutSource.contains("phase.phase === 'authError' ? 'error'"))
+
+        let lockScreenSource = try mobileAppSource(at: "src/components/app-lock-screen.tsx")
+        XCTAssertTrue(lockScreenSource.contains("Text style={styles.title}>Unlock Mobile Wallet<"))
+        XCTAssertTrue(lockScreenSource.contains("Authentication was cancelled or unsuccessful."))
+        XCTAssertTrue(lockScreenSource.contains("accessibilityLabel=\"Try Again\""))
+        XCTAssertTrue(lockScreenSource.contains("onPress={onRetry}"))
+    }
+
+    // MARK: - O: only the initial attempt is delayed; retry is immediate
+
+    func testOnlyTheInitialAttemptIsDelayedRetryIsImmediate() throws {
+        let source = try mobileAppSource(at: "src/app/_layout.tsx")
+
+        let effectStart = try XCTUnwrap(source.range(of: "useEffect(() => {"))
+        let effectEnd = try XCTUnwrap(source.range(of: "\n  }, [phase.phase]);", range: effectStart.upperBound..<source.endIndex))
+        let effectBody = source[effectStart.upperBound..<effectEnd.lowerBound]
+
+        // A one-shot flag, consumed once per component instance, decides
+        // whether this 'locked' entry is the initial (delayed) attempt or
+        // a retry (immediate) — never re-armed anywhere in the effect.
+        XCTAssertTrue(effectBody.contains("const isInitialAttempt = isFirstAttemptRef.current;"))
+        XCTAssertTrue(effectBody.contains("isFirstAttemptRef.current = false;"))
+        XCTAssertEqual(
+            effectBody.components(separatedBy: "isFirstAttemptRef.current = false").count - 1, 1,
+            "isFirstAttemptRef must be consumed exactly once and never reset back to true"
+        )
+
+        // Only the initial-attempt branch is wrapped in the timer; the
+        // non-initial (retry) path calls beginAuthentication() immediately,
+        // with no delay.
+        let ifStart = try XCTUnwrap(effectBody.range(of: "if (isInitialAttempt) {"))
+        let ifEnd = try XCTUnwrap(effectBody.range(of: "\n    }", range: ifStart.upperBound..<effectBody.endIndex))
+        let ifBody = effectBody[ifStart.upperBound..<ifEnd.lowerBound]
+        XCTAssertTrue(ifBody.contains("setTimeout(beginAuthentication, INITIAL_UNLOCK_HOLD_MS)"))
+
+        let afterIf = effectBody[ifEnd.upperBound...]
+        XCTAssertTrue(afterIf.contains("beginAuthentication();"), "the non-initial (retry) path must call beginAuthentication() directly, unwrapped by any timer")
+
+        // handleRetry itself never touches isFirstAttemptRef — it only ever
+        // re-enters 'locked', relying on the effect above (already proven)
+        // to correctly treat every re-entry after the first as immediate.
+        let retryStart = try XCTUnwrap(source.range(of: "const handleRetry = useCallback(() => {"))
+        let retryEnd = try XCTUnwrap(source.range(of: "\n  }, []);", range: retryStart.upperBound..<source.endIndex))
+        let retryBody = source[retryStart.upperBound..<retryEnd.lowerBound]
+        XCTAssertFalse(retryBody.contains("isFirstAttemptRef"), "retry must never reset the one-shot initial-attempt flag")
     }
 
     // MARK: - L: requestRevealBackup remains independent

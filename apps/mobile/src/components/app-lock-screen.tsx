@@ -1,12 +1,21 @@
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ShieldMark } from '@/components/shield-mark';
 import { Colors, Spacing } from '@/constants/theme';
 
 const palette = Colors.dark;
 
+/**
+ * 'holding' — Stage 5F.4C's initial cold-launch hold: shield/logo on the
+ *   dark background ONLY, nothing else, matching the desired
+ *   splash-to-Face-ID visual continuity.
+ * 'authenticating' — a `requestAppUnlock()` call is in flight.
+ * 'error' — the most recent attempt failed/was cancelled; retry offered.
+ */
+type AppLockScreenVariant = 'holding' | 'authenticating' | 'error';
+
 type AppLockScreenProps = {
-  isAuthenticating: boolean;
+  variant: AppLockScreenVariant;
   onRetry: () => void;
 };
 
@@ -23,17 +32,20 @@ type AppLockScreenProps = {
  * authentication-failure-type or OS error detail — a generic message only,
  * consistent with ADR-005 §9 ("the lock screen itself must not leak account
  * state") and this stage's own explicit UX requirement.
+ *
+ * Stage 5F.4C: the same single `ShieldMark` render site is reused across
+ * all three variants. Both `holding` and `authenticating` render only the
+ * shield; the title/message/retry controls appear only after an
+ * authentication error or cancellation.
  */
-export function AppLockScreen({ isAuthenticating, onRetry }: AppLockScreenProps) {
+export function AppLockScreen({ variant, onRetry }: AppLockScreenProps) {
   return (
     <View style={styles.container}>
       <View style={styles.content}>
         <ShieldMark size={40} />
-        <Text style={styles.title}>Unlock Mobile Wallet</Text>
-        {isAuthenticating ? (
-          <ActivityIndicator size="small" color={palette.accentGold} style={styles.spinner} />
-        ) : (
+        {variant === 'error' ? (
           <>
+            <Text style={styles.title}>Unlock Mobile Wallet</Text>
             <Text style={styles.message}>Authentication was cancelled or unsuccessful.</Text>
             <Pressable
               accessibilityRole="button"
@@ -43,7 +55,7 @@ export function AppLockScreen({ isAuthenticating, onRetry }: AppLockScreenProps)
               <Text style={styles.retryButtonLabel}>Try Again</Text>
             </Pressable>
           </>
-        )}
+        ) : null}
       </View>
     </View>
   );
@@ -73,9 +85,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
     maxWidth: 260,
-  },
-  spinner: {
-    marginTop: Spacing.two,
   },
   retryButton: {
     marginTop: Spacing.two,

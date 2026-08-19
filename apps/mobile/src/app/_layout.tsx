@@ -126,6 +126,29 @@ type AppLockPhase =
   | { phase: 'unlocked' }
   | { phase: 'authError' };
 
+/**
+ * Stage 5F.4C — UX timing only, not a security boundary: how long the
+ * initial cold-launch branding is held before the FIRST
+ * `requestAppUnlock()` call is issued, so the shield/branding remains
+ * visibly present for a deliberate moment before the native Face ID/Touch
+ * ID/passcode prompt appears, rather than flashing past almost
+ * instantly. Applies exactly once per `AppLockGate` mount — see
+ * `isFirstAttemptRef` below — never to a `Try Again` retry, and has no
+ * relationship whatsoever to backgrounding/resume/re-lock timing (all
+ * still out of scope, deferred to Stage 5F.5). Protected children remain
+ * exactly as unreachable during this hold as during any other
+ * non-`unlocked` phase (see the render branch below) — the hold changes
+ * only when the native call is issued, never whether/what mounts.
+ *
+ * During this hold, `AppLockScreen` renders its `'holding'` variant —
+ * shield/logo centered on the dark background ONLY, no title, no spinner,
+ * no retry affordance — so the physical-device result is a single
+ * continuous shield presentation from `AnimatedSplashOverlay` through to
+ * the native Face ID prompt, never a blank pause or a premature "Unlock
+ * Mobile Wallet" flash.
+ */
+const INITIAL_UNLOCK_HOLD_MS = 1000;
+
 function AppLockGate({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<AppLockPhase>(() => {
     try {
@@ -143,6 +166,11 @@ function AppLockGate({ children }: { children: ReactNode }) {
   // single-flight pattern ProductionStartupGate's own backup-resume effect
   // already uses.
   const unlockInFlightRef = useRef(false);
+  // Stage 5F.4C: true only for this component instance's very first
+  // 'locked' entry (the genuine cold-launch attempt) — consumed exactly
+  // once below and never reset back to true, so a retry (handleRetry)
+  // always takes the immediate, non-delayed path.
+  const isFirstAttemptRef = useRef(true);
 
   useEffect(() => {
     if (phase.phase !== 'locked') {
@@ -153,38 +181,51 @@ function AppLockGate({ children }: { children: ReactNode }) {
       return;
     }
     unlockInFlightRef.current = true;
-    setPhase({ phase: 'authenticating' });
+
+    const isInitialAttempt = isFirstAttemptRef.current;
+    isFirstAttemptRef.current = false;
 
     // Exactly one fresh call per 'locked' entry — never a cached/reused
     // Promise. Only the success branch below may ever set 'unlocked'.
-    requestAppUnlock()
-      .then(() => {
-        unlockInFlightRef.current = false;
-        setPhase({ phase: 'unlocked' });
-      })
-      .catch(() => {
-        // Rejection (failure/cancellation/unavailability) never becomes
-        // 'unlocked' — protected children remain unmounted, and the user
-        // is offered an explicit retry via AppLockScreen below.
-        unlockInFlightRef.current = false;
-        setPhase({ phase: 'authError' });
-      });
+    const beginAuthentication = () => {
+      setPhase({ phase: 'authenticating' });
+      requestAppUnlock()
+        .then(() => {
+          unlockInFlightRef.current = false;
+          setPhase({ phase: 'unlocked' });
+        })
+        .catch(() => {
+          // Rejection (failure/cancellation/unavailability) never becomes
+          // 'unlocked' — protected children remain unmounted, and the
+          // user is offered an explicit retry via AppLockScreen below.
+          unlockInFlightRef.current = false;
+          setPhase({ phase: 'authError' });
+        });
+    };
+
+    if (isInitialAttempt) {
+      const timer = setTimeout(beginAuthentication, INITIAL_UNLOCK_HOLD_MS);
+      return () => clearTimeout(timer);
+    }
+    beginAuthentication();
   }, [phase.phase]);
 
   const handleRetry = useCallback(() => {
     // Re-enters 'locked', which re-triggers the effect above and issues a
-    // genuinely fresh requestAppUnlock() call — never the previous
-    // attempt's Promise/result.
+    // genuinely fresh requestAppUnlock() call, immediately — never the
+    // previous attempt's Promise/result, and never delayed by
+    // INITIAL_UNLOCK_HOLD_MS (isFirstAttemptRef is already false by now).
     setPhase({ phase: 'locked' });
   }, []);
 
   if (phase.phase === 'noLockNeeded' || phase.phase === 'unlocked') {
     return <>{children}</>;
   }
-  // 'locked' (about to issue a call) and 'authenticating' (call in
-  // flight) both render the same non-error, in-progress presentation;
-  // only 'authError' shows the retry affordance.
-  return <AppLockScreen isAuthenticating={phase.phase !== 'authError'} onRetry={handleRetry} />;
+  // 'locked' (holding, or about to issue a call) renders shield-only;
+  // 'authenticating' (call in flight) adds the title/spinner; only
+  // 'authError' shows the title/message/retry affordance.
+  const variant = phase.phase === 'authError' ? 'error' : phase.phase === 'authenticating' ? 'authenticating' : 'holding';
+  return <AppLockScreen variant={variant} onRetry={handleRetry} />;
 }
 
 /**
