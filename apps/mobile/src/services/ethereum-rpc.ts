@@ -557,7 +557,11 @@ export async function broadcastEthMainnetRawTransaction(
     return { outcome: 'rejected', reason: `provider returned a malformed transaction hash: ${hexHash}`, providerId: provider.id };
   }
 
-  if (txHash !== expectedTxHash) {
+  // Stage 5G.2.4: case-insensitive — both sides are already format-validated
+  // 0x-prefixed 64-hex-char strings (`toEthereumTxHash`), and hex-digit case
+  // carries no value; a provider or the signer using a different case for
+  // the identical hash must never be treated as a mismatch.
+  if (txHash.toLowerCase() !== expectedTxHash.toLowerCase()) {
     return {
       outcome: 'rejected',
       reason: 'provider returned a transaction hash that does not match the locally signed transaction',

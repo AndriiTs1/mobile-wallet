@@ -117,24 +117,16 @@ final class WalletEthereumSendUiSourceAuditTests: XCTestCase {
         XCTAssertFalse(source.contains("broadcastEthMainnetRawTransaction("))
     }
 
-    func testReviewsReservedCtaHasNoOnPressAndOnlyBackEditIsInteractive() throws {
-        // The reserved "Confirm & Send" CTA is deliberately NOT a Pressable
-        // — it is a plain View, so it structurally cannot receive an
-        // onPress no matter how it is styled. The only Pressables in this
-        // screen are Back/Edit (main view) and the empty-state's "Back to
-        // Send" fallback — both pure navigation, never forward-progressing.
-        let source = try sendReviewSource()
-        let ctaStart = try XCTUnwrap(source.range(of: "<View accessibilityState={{ disabled: true }} style={styles.reservedCta}>"))
-        let ctaEnd = try XCTUnwrap(source.range(of: "</View>", range: ctaStart.upperBound..<source.endIndex))
-        let ctaBlock = source[ctaStart.lowerBound..<ctaEnd.upperBound]
-        XCTAssertFalse(ctaBlock.contains("onPress"), "the reserved Confirm & Send placeholder must have no onPress")
-        XCTAssertFalse(ctaBlock.contains("<Pressable"), "the reserved Confirm & Send placeholder must not be a Pressable")
-
-        let pressableCount = source.components(separatedBy: "<Pressable").count - 1
-        XCTAssertEqual(pressableCount, 2, "Review must expose exactly the Back/Edit and empty-state Pressables, nothing more")
-        XCTAssertTrue(source.contains("onPress={() => router.back()}"))
-        XCTAssertTrue(source.contains("onPress={() => router.replace('/send')}"))
-    }
+    // NOTE: the Stage 5G.2.3 placeholder this test originally audited (a
+    // static, deliberately non-Pressable "Confirm & Send" reserved-for-later
+    // box) was replaced by Stage 5G.2.4's real, functional Confirm & Send
+    // flow — see `WalletEthereumSendConfirmationSourceAuditTests` for that
+    // stage's equivalent (and stricter) coverage:
+    // `testSuccessStateNeverRendersAConfirmPressableAgain` and
+    // `testAmbiguousAndHashMismatchNeverRenderTheConfirmPressable` prove the
+    // CTA is absent/blocked exactly where it must be, and
+    // `testConfirmIsSingleFlightGuardedBeforeAnyStateChange` proves rapid
+    // taps can't double-fire it.
 
     // MARK: - 11: prepared snapshot is not persisted
 
