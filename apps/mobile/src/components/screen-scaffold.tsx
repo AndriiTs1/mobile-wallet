@@ -94,7 +94,20 @@ export function ScreenScaffold({ header, children, contentStyle }: ScreenScaffol
           // still sourced from `insets` — unaffected by this fix.
           contentInset={{ ...insets, top: 0, bottom: 0 }}
           contentContainerStyle={[styles.contentContainer, contentPlatformStyle]}
-          showsVerticalScrollIndicator={false}>
+          showsVerticalScrollIndicator={false}
+          // Stage 5G.2.3 bugfix — ScrollView's default ('never') swallows a
+          // tap on a touchable child as a keyboard-dismiss gesture instead of
+          // firing that child's onPress whenever a TextInput inside this
+          // ScrollView is focused. Confirmed root cause of the physical-device
+          // "Review button does nothing" bug: Send's Amount field uses a
+          // `decimal-pad` keyboard, which has no Done/dismiss key on iOS, so
+          // the keyboard is virtually always still open when Review is
+          // tapped — that first tap silently dismissed the keyboard instead
+          // of ever invoking `handleContinue`. `"handled"` lets a touchable
+          // that handles the touch (e.g. a `Pressable`) fire normally even
+          // while a TextInput is focused elsewhere in this ScrollView, on
+          // every screen, not just Send.
+          keyboardShouldPersistTaps="handled">
           <View style={[styles.container, contentStyle]}>
             {children}
             {/* Deliberate visual breathing room after the last piece of content —
