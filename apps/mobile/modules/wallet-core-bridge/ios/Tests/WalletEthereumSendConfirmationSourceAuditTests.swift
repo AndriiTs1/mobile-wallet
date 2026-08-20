@@ -135,35 +135,44 @@ final class WalletEthereumSendConfirmationSourceAuditTests: XCTestCase {
         XCTAssertTrue(between.isEmpty, "the single-flight guard must be the first statement in handleConfirm")
     }
 
-    func testSuccessStateNeverRendersAConfirmPressableAgain() throws {
-        let source = try mobileAppSource(at: "src/app/send-review.tsx")
-        let successBranchStart = try XCTUnwrap(source.range(of: "if (confirmState.status === 'success') {"))
-        let successBranchEnd = try XCTUnwrap(source.range(of: "\n  }", range: successBranchStart.upperBound..<source.endIndex))
-        let successBranch = source[successBranchStart.lowerBound..<successBranchEnd.upperBound]
-        XCTAssertFalse(successBranch.contains("accessibilityLabel=\"Confirm & Send\""),
-                       "the success branch must never render the Confirm & Send control again — a sent snapshot cannot be resubmitted")
-        XCTAssertTrue(successBranch.contains("accessibilityLabel=\"Done\""))
-        XCTAssertTrue(successBranch.contains("onPress={handleDone}"))
-        // `handleDone` itself (defined earlier in the component, not inline
-        // in this JSX) is the one place that calls router.dismissAll().
-        XCTAssertTrue(source.contains("const handleDone = useCallback(() => {\n    router.dismissAll();\n  }, [router]);"))
-    }
+    // NOTE (Stage 5G.2.5): this test originally audited a single 'success'
+    // status that replaced the whole screen with a Done-only panel. That
+    // status was superseded by the fuller post-broadcast lifecycle
+    // (`pending`/`confirmed`/`failed`/`uncertain`, all dispatched to the
+    // shared `SendStatusView`) — see
+    // `WalletEthereumSendStatusSourceAuditTests.testPostBroadcastStatusViewNeverOffersSendAgainAndAlwaysOffersDone`
+    // for the equivalent (and now more complete) coverage: every
+    // post-broadcast status offers Done, calling `router.dismissAll()`, and
+    // none of them ever render the Confirm & Send control again.
 
-    func testAmbiguousAndHashMismatchNeverRenderTheConfirmPressable() throws {
+    // NOTE (Stage 5G.2.5): this test originally audited `isConfirmBlocked`,
+    // a mechanism that kept the pre-broadcast 'error' status on screen (with
+    // the Confirm & Send control conditionally hidden) for ambiguous/
+    // hash-mismatch outcomes. Those outcomes are no longer represented as an
+    // 'error' status at all when a signer hash is available — they now
+    // resolve via `resolveStatus`/`checkEthereumSendStatus` into the
+    // dedicated post-broadcast status screen instead, which structurally
+    // has no Confirm & Send control in the first place. See
+    // `WalletEthereumSendStatusSourceAuditTests.testAmbiguousAndHashMismatchResolveUsingTheExistingSignerHashOnly`
+    // and `.testPostBroadcastStatusViewNeverOffersSendAgainAndAlwaysOffersDone`
+    // for the current equivalent coverage. `RETRYABLE_REASONS` now contains
+    // only `'auth_or_signing_failed'` — verified by
+    // `testConfirmationErrorTaxonomyReflectsThePostBroadcastLifecycle` below.
+
+    func testConfirmationErrorTaxonomyReflectsThePostBroadcastLifecycle() throws {
         let source = try mobileAppSource(at: "src/app/send-review.tsx")
-        XCTAssertTrue(source.contains("function isConfirmBlocked(confirmState: ConfirmState): boolean {"))
-        XCTAssertTrue(source.contains("return confirmState.status === 'error' && !RETRYABLE_REASONS.has(confirmState.reason);"))
         XCTAssertTrue(source.contains("RETRYABLE_REASONS: ReadonlySet<EthereumSendConfirmationErrorReason> = new Set(["))
-        XCTAssertTrue(source.contains("'auth_or_signing_failed',"))
-        XCTAssertTrue(source.contains("'broadcast_rejected',"))
-        // Specifically: ambiguous and hash_mismatch are NOT in the retryable set.
         let retryableSetStart = try XCTUnwrap(source.range(of: "RETRYABLE_REASONS: ReadonlySet<EthereumSendConfirmationErrorReason> = new Set(["))
         let retryableSetEnd = try XCTUnwrap(source.range(of: "]);", range: retryableSetStart.upperBound..<source.endIndex))
         let retryableSet = source[retryableSetStart.lowerBound..<retryableSetEnd.upperBound]
+        // Only a pre-signing/pre-broadcast failure is retryable via a fresh
+        // Confirm & Send tap — everything else either has its own definite
+        // 'failed' status (broadcast_rejected) or resolves via status
+        // checking (broadcast_ambiguous/hash_mismatch with a known hash).
+        XCTAssertTrue(retryableSet.contains("'auth_or_signing_failed'"))
+        XCTAssertFalse(retryableSet.contains("'broadcast_rejected'"))
         XCTAssertFalse(retryableSet.contains("'broadcast_ambiguous'"))
         XCTAssertFalse(retryableSet.contains("'hash_mismatch'"))
-        // The Confirm & Send Pressable render is gated behind !isConfirmBlocked(...).
-        XCTAssertTrue(source.contains("isConfirmBlocked(confirmState) ? ("))
     }
 
     func testNoSigningOrBroadcastBeforeExplicitConfirm() throws {
@@ -173,8 +182,18 @@ final class WalletEthereumSendConfirmationSourceAuditTests: XCTestCase {
         // onPress — never inside a useEffect/mount-time call.
         let callCount = source.components(separatedBy: "confirmAndSendEthereumV1(").count - 1
         XCTAssertEqual(callCount, 1)
-        XCTAssertFalse(source.contains("useEffect"), "Review must never auto-trigger confirmation on mount or on any state change")
         XCTAssertTrue(source.contains("onPress={handleConfirm}"))
+        // Stage 5G.2.5 adds one legitimate `useEffect` — purely an
+        // unmount-tracking cleanup (`isMountedRef.current = false`) guarding
+        // async status-lookup continuations, never a trigger for signing or
+        // broadcasting. Assert its body specifically, rather than banning
+        // `useEffect` outright.
+        let effectStart = try XCTUnwrap(source.range(of: "useEffect(() => {"))
+        let effectEnd = try XCTUnwrap(source.range(of: "\n  }, []);", range: effectStart.upperBound..<source.endIndex))
+        let effectBody = source[effectStart.lowerBound..<effectEnd.upperBound]
+        XCTAssertTrue(effectBody.contains("isMountedRef.current = false;"))
+        XCTAssertFalse(effectBody.contains("confirmAndSendEthereumV1("), "the mount-time effect must never trigger confirmation")
+        XCTAssertFalse(effectBody.contains("handleConfirm"), "the mount-time effect must never call handleConfirm")
     }
 
     func testAppUnlockAndRecoveryAuthenticationAreNeverReferencedHere() throws {
@@ -207,7 +226,10 @@ final class WalletEthereumSendConfirmationSourceAuditTests: XCTestCase {
     private func handleConfirmBody() throws -> String {
         let source = try mobileAppSource(at: "src/app/send-review.tsx")
         let start = try XCTUnwrap(source.range(of: "const handleConfirm = useCallback(async () => {"))
-        let end = try XCTUnwrap(source.range(of: "}, [prepared]);", range: start.upperBound..<source.endIndex))
+        // Stage 5G.2.5: handleConfirm now also depends on resolveStatus
+        // (used to resolve an ambiguous/hash-mismatch outcome without
+        // re-signing — see WalletEthereumSendStatusSourceAuditTests).
+        let end = try XCTUnwrap(source.range(of: "}, [prepared, resolveStatus]);", range: start.upperBound..<source.endIndex))
         return String(source[start.lowerBound..<end.upperBound])
     }
 

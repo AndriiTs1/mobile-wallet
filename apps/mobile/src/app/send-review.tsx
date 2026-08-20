@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { formatWeiAsEthDecimalString, type EthereumTxHash } from 'chain-domain';
 
@@ -13,13 +13,15 @@ import {
   type EthereumSendConfirmationErrorReason,
 } from '@/services/ethereum-send-confirmation';
 import { consumePendingEthereumSend } from '@/services/ethereum-send-session';
+import { checkEthereumSendStatus, type EthereumSendStatus } from '@/services/ethereum-send-status';
 
 const palette = Colors.dark;
 
 /**
  * Stage 5G.2.4 — user-facing copy for each `EthereumSendConfirmationError`
- * reason. Never the underlying/raw error message — that stays entirely
- * inside `ethereum-send-confirmation.ts` and is never read here.
+ * reason that stays in the pre-broadcast `'error'` bucket. Never the
+ * underlying/raw error message — that stays entirely inside
+ * `ethereum-send-confirmation.ts` and is never read here.
  */
 const ERROR_MESSAGES: Record<EthereumSendConfirmationErrorReason, string> = {
   auth_or_signing_failed: 'Authentication was cancelled or signing failed.',
@@ -29,25 +31,27 @@ const ERROR_MESSAGES: Record<EthereumSendConfirmationErrorReason, string> = {
 };
 
 /**
- * Retry is offered ONLY for failures where nothing was ever (or definitely
- * was not) broadcast — never for an outcome where the network's own state
- * is uncertain. An ambiguous transport failure or an unexplained hash
- * mismatch must never get a one-tap immediate retry here: the existing RPC
- * primitives give no proof that would be safe (see
- * `broadcastEthMainnetRawTransaction`'s own 'ambiguous' contract) — the
- * user must explicitly step away (Back to Edit, forcing a fresh prepare) or
- * to Home instead.
+ * Retry (a fresh `confirmAndSendEthereumV1` call, i.e. fresh auth + signing
+ * + broadcast) is offered ONLY for `auth_or_signing_failed` — nothing was
+ * ever broadcast. Every other reason either has its own dedicated
+ * post-broadcast status screen (Stage 5G.2.5: `broadcast_rejected` ->
+ * `'failed'`, `broadcast_ambiguous`/`hash_mismatch` with a known hash ->
+ * resolved via `checkEthereumSendStatus`) or is a genuinely unexplained
+ * failure with no safe retry path.
  */
 const RETRYABLE_REASONS: ReadonlySet<EthereumSendConfirmationErrorReason> = new Set([
   'auth_or_signing_failed',
-  'broadcast_rejected',
 ]);
 
 type ConfirmState =
   | { status: 'ready' }
   | { status: 'signing' }
   | { status: 'broadcasting' }
-  | { status: 'success'; txHash: EthereumTxHash }
+  | { status: 'resolving'; txHash: EthereumTxHash }
+  | { status: 'pending'; txHash: EthereumTxHash }
+  | { status: 'confirmed'; txHash: EthereumTxHash }
+  | { status: 'failed'; txHash: EthereumTxHash | null }
+  | { status: 'uncertain'; txHash: EthereumTxHash }
   | { status: 'error'; reason: EthereumSendConfirmationErrorReason };
 
 function abbreviateTxHash(txHash: EthereumTxHash): string {
@@ -55,13 +59,16 @@ function abbreviateTxHash(txHash: EthereumTxHash): string {
 }
 
 /**
- * Stage 5G.2.3/5G.2.4 — Review + Confirm & Send. Displays exactly the
- * immutable `EthereumV1PreparedSend` snapshot the Send form already
- * prepared (Stage 5G.2.2) — this screen never calls `prepareEthereumV1Send`
- * itself, never re-fetches nonce/fee/balance, and never recomputes the
- * amount/recipient. Confirm & Send signs and broadcasts EXACTLY this
- * snapshot via `confirmAndSendEthereumV1` (Stage 5G.2.4) — never a
- * silently re-fetched transaction.
+ * Stage 5G.2.3/5G.2.4/5G.2.5 — Review, Confirm & Send, and post-broadcast
+ * status. Displays exactly the immutable `EthereumV1PreparedSend` snapshot
+ * the Send form already prepared (Stage 5G.2.2) — this screen never calls
+ * `prepareEthereumV1Send` itself, never re-fetches nonce/fee/balance, and
+ * never recomputes the amount/recipient. Confirm & Send signs and
+ * broadcasts EXACTLY this snapshot via `confirmAndSendEthereumV1` (Stage
+ * 5G.2.4) — never a silently re-fetched transaction. Once broadcast has
+ * been attempted at all (accepted, rejected, or ambiguous), this screen
+ * NEVER signs or broadcasts again for this snapshot — status resolution
+ * (Stage 5G.2.5) is read-only, via `checkEthereumSendStatus`.
  */
 export default function SendReviewScreen() {
   const router = useRouter();
@@ -74,10 +81,56 @@ export default function SendReviewScreen() {
   // Single-flight guard against a duplicate concurrent confirm — e.g. a
   // fast double-tap before the first attempt's promise has settled. Mirrors
   // the same ref-based pattern `send.tsx`'s `isPreparingRef` already uses.
-  // Once a broadcast succeeds, `confirmState.status` becomes `'success'`
-  // and the Confirm & Send control is unmounted entirely (see the render
-  // below) — there is no path back to a re-armed CTA for this snapshot.
+  // Once a broadcast attempt has been made at all, `confirmState.status`
+  // moves to one of the post-broadcast statuses below and the Confirm &
+  // Send control is unmounted entirely (see the render below) — there is
+  // no path back to a re-armed CTA for this snapshot.
   const isConfirmingRef = useRef(false);
+  // Separate single-flight guard for the read-only "Check status" action —
+  // independent of `isConfirmingRef`, since checking status never signs or
+  // broadcasts and must remain possible even while nothing else is
+  // in-flight.
+  const isCheckingStatusRef = useRef(false);
+  // Guards every async continuation in this component against updating
+  // state after unmount — this screen performs no interval/timer-based
+  // polling (see `ethereum-send-status.ts`'s own doc comment for why a
+  // single manual/one-shot check is this stage's deliberate, minimal
+  // design), so there is no timer to cancel on unmount; this ref is the
+  // corresponding safeguard for the one kind of async work that DOES
+  // exist — a single in-flight status lookup.
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  /**
+   * The ONE place this screen ever calls `checkEthereumSendStatus` — reused
+   * identically for the automatic one-shot resolution right after an
+   * ambiguous/hash-mismatch broadcast outcome, and for the manual "Check
+   * status" button. Read-only: never signs, never broadcasts, never
+   * constructs a transaction (see that function's own doc comment).
+   */
+  const resolveStatus = useCallback(async (txHash: EthereumTxHash) => {
+    setConfirmState({ status: 'resolving', txHash });
+    let status: EthereumSendStatus;
+    try {
+      status = await checkEthereumSendStatus(txHash);
+    } catch {
+      // The lookup itself failed at the transport level (e.g. offline) —
+      // stay uncertain rather than fabricating a definitive status either
+      // way.
+      if (isMountedRef.current) {
+        setConfirmState({ status: 'uncertain', txHash });
+      }
+      return;
+    }
+    if (!isMountedRef.current) {
+      return;
+    }
+    setConfirmState({ status, txHash });
+  }, []);
 
   const handleConfirm = useCallback(async () => {
     if (!prepared || isConfirmingRef.current) {
@@ -91,18 +144,52 @@ export default function SendReviewScreen() {
         onPhaseChange: (phase) => setConfirmState({ status: phase }),
       });
       isConfirmingRef.current = false;
-      setConfirmState({ status: 'success', txHash });
+      // Broadcast accepted: show "Transaction sent" / pending immediately —
+      // never block the UI waiting for mining. No automatic lookup here;
+      // `'accepted'` is already a definitive positive signal, unlike the
+      // ambiguous case below.
+      setConfirmState({ status: 'pending', txHash });
     } catch (error) {
       isConfirmingRef.current = false;
-      // Every throw site inside confirmAndSendEthereumV1 wraps its error as
-      // EthereumSendConfirmationError; a non-matching error is treated as
-      // the least-trusted, NON-retryable outcome rather than defaulting to
-      // one that would offer an easy retry.
+
+      if (error instanceof EthereumSendConfirmationError) {
+        if (error.reason === 'broadcast_rejected') {
+          // Definite rejection — no lookup offered (the transaction never
+          // reached a mempool, so a lookup would only ever return
+          // 'not_found', which would misleadingly read as "uncertain"). No
+          // automatic new nonce, no re-sign — the user must explicitly
+          // start a fresh Send.
+          setConfirmState({ status: 'failed', txHash: null });
+          return;
+        }
+        if (
+          (error.reason === 'broadcast_ambiguous' || error.reason === 'hash_mismatch') &&
+          error.signerTxHash
+        ) {
+          // Never re-sign, never broadcast new bytes — resolve using the
+          // already-known locally-computed hash only.
+          await resolveStatus(error.signerTxHash);
+          return;
+        }
+      }
+
       const reason =
         error instanceof EthereumSendConfirmationError ? error.reason : 'hash_mismatch';
       setConfirmState({ status: 'error', reason });
     }
-  }, [prepared]);
+  }, [prepared, resolveStatus]);
+
+  const handleCheckStatus = useCallback(async () => {
+    if (isCheckingStatusRef.current) {
+      return;
+    }
+    if (confirmState.status !== 'pending' && confirmState.status !== 'uncertain') {
+      return;
+    }
+    isCheckingStatusRef.current = true;
+    await resolveStatus(confirmState.txHash);
+    isCheckingStatusRef.current = false;
+  }, [confirmState, resolveStatus]);
 
   const handleDone = useCallback(() => {
     router.dismissAll();
@@ -128,22 +215,14 @@ export default function SendReviewScreen() {
 
   const isBusy = confirmState.status === 'signing' || confirmState.status === 'broadcasting';
 
-  if (confirmState.status === 'success') {
-    return (
-      <ScreenScaffold header={<ScreenHeader title="Review" />}>
-        <View style={styles.successPanel}>
-          <Text style={styles.successTitle}>Transaction sent</Text>
-          <Text style={styles.successHash}>{abbreviateTxHash(confirmState.txHash)}</Text>
-        </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Done"
-          onPress={handleDone}
-          style={({ pressed }) => [styles.continueButton, pressed && styles.continueButtonDisabled]}>
-          <Text style={styles.continueButtonLabel}>Done</Text>
-        </Pressable>
-      </ScreenScaffold>
-    );
+  if (
+    confirmState.status === 'resolving' ||
+    confirmState.status === 'pending' ||
+    confirmState.status === 'confirmed' ||
+    confirmState.status === 'failed' ||
+    confirmState.status === 'uncertain'
+  ) {
+    return <SendStatusView confirmState={confirmState} onCheckStatus={handleCheckStatus} onDone={handleDone} />;
   }
 
   return (
@@ -177,35 +256,21 @@ export default function SendReviewScreen() {
         </View>
       ) : null}
 
-      {isConfirmBlocked(confirmState) ? (
-        // Non-retryable failure (ambiguous broadcast / hash mismatch): the
-        // CTA is deliberately NOT rendered at all — not merely disabled —
-        // so a further tap can never re-trigger signing/broadcasting for
-        // this snapshot. The only way forward is Back to Edit, which forces
-        // an explicit fresh prepare (a new nonce, new review) rather than a
-        // blind resubmission of a transaction whose network outcome this
-        // app cannot itself confirm.
-        <Text style={styles.retryHint}>
-          For your safety, this transaction can’t be resubmitted automatically. Go back and prepare
-          a new one once you’ve confirmed the status.
-        </Text>
-      ) : (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Confirm & Send"
-          accessibilityState={{ disabled: isBusy, busy: isBusy }}
-          disabled={isBusy}
-          onPress={handleConfirm}
-          style={({ pressed }) => [
-            styles.continueButton,
-            (isBusy || pressed) && styles.continueButtonDisabled,
-          ]}>
-          <View style={styles.continueButtonContent}>
-            {isBusy ? <ActivityIndicator size="small" color={palette.background} /> : null}
-            <Text style={styles.continueButtonLabel}>{confirmButtonLabel(confirmState)}</Text>
-          </View>
-        </Pressable>
-      )}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Confirm & Send"
+        accessibilityState={{ disabled: isBusy, busy: isBusy }}
+        disabled={isBusy}
+        onPress={handleConfirm}
+        style={({ pressed }) => [
+          styles.continueButton,
+          (isBusy || pressed) && styles.continueButtonDisabled,
+        ]}>
+        <View style={styles.continueButtonContent}>
+          {isBusy ? <ActivityIndicator size="small" color={palette.background} /> : null}
+          <Text style={styles.continueButtonLabel}>{confirmButtonLabel(confirmState)}</Text>
+        </View>
+      </Pressable>
 
       {!isBusy && confirmState.status === 'error' && RETRYABLE_REASONS.has(confirmState.reason) ? (
         <Text style={styles.retryHint}>Tap Confirm & Send again to retry.</Text>
@@ -230,11 +295,90 @@ function confirmButtonLabel(confirmState: ConfirmState): string {
   return 'Confirm & Send';
 }
 
-/** True only for a non-retryable failure — an ambiguous broadcast outcome
- * or an unexplained hash mismatch — where re-tapping Confirm & Send must
- * never be possible for this same reviewed snapshot. */
-function isConfirmBlocked(confirmState: ConfirmState): boolean {
-  return confirmState.status === 'error' && !RETRYABLE_REASONS.has(confirmState.reason);
+type PostBroadcastConfirmState = Extract<
+  ConfirmState,
+  { status: 'resolving' | 'pending' | 'confirmed' | 'failed' | 'uncertain' }
+>;
+
+const STATUS_COPY: Record<
+  PostBroadcastConfirmState['status'],
+  { title: string; body: string }
+> = {
+  resolving: {
+    title: 'Checking status…',
+    body: 'This only reads the network — nothing is signed or sent again.',
+  },
+  pending: {
+    title: 'Transaction sent',
+    body: 'Your transaction has been broadcast and is waiting to be mined.',
+  },
+  confirmed: {
+    title: 'Transaction confirmed',
+    body: 'Your transaction has been mined successfully.',
+  },
+  failed: {
+    title: 'Transaction failed',
+    body: 'This transaction did not succeed. No further attempt was made automatically.',
+  },
+  uncertain: {
+    title: 'Status uncertain',
+    body: "We couldn't confirm this transaction's status yet. This does not necessarily mean it failed.",
+  },
+};
+
+/**
+ * Stage 5G.2.5 — the one post-broadcast result screen, covering every
+ * status a Send can end up in after a broadcast attempt has actually been
+ * made. "Check status" is offered only for `pending`/`uncertain` (the two
+ * non-final statuses) and always reuses the same read-only
+ * `checkEthereumSendStatus` path — never signing, never broadcasting.
+ * "Send again" is never offered from here, for any status: reusing this
+ * exact reviewed snapshot for a second signing/broadcast attempt is exactly
+ * what this stage's security requirements forbid.
+ */
+function SendStatusView({
+  confirmState,
+  onCheckStatus,
+  onDone,
+}: {
+  confirmState: PostBroadcastConfirmState;
+  onCheckStatus: () => void;
+  onDone: () => void;
+}) {
+  const copy = STATUS_COPY[confirmState.status];
+
+  return (
+    <ScreenScaffold header={<ScreenHeader title="Review" />}>
+      <View style={styles.successPanel}>
+        {confirmState.status === 'resolving' ? (
+          <ActivityIndicator size="small" color={palette.text} />
+        ) : null}
+        <Text style={styles.successTitle}>{copy.title}</Text>
+        <Text style={styles.statusBody}>{copy.body}</Text>
+        {confirmState.status !== 'resolving' && confirmState.txHash ? (
+          <Text style={styles.successHash}>{abbreviateTxHash(confirmState.txHash)}</Text>
+        ) : null}
+      </View>
+
+      {confirmState.status === 'pending' || confirmState.status === 'uncertain' ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Check status"
+          onPress={onCheckStatus}
+          style={({ pressed }) => [styles.checkStatusButton, pressed && styles.continueButtonDisabled]}>
+          <Text style={styles.checkStatusLabel}>Check status</Text>
+        </Pressable>
+      ) : null}
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Done"
+        onPress={onDone}
+        style={({ pressed }) => [styles.continueButton, pressed && styles.continueButtonDisabled]}>
+        <Text style={styles.continueButtonLabel}>Done</Text>
+      </Pressable>
+    </ScreenScaffold>
+  );
 }
 
 type ReviewRowProps = {
@@ -351,6 +495,20 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
   },
+  checkStatusButton: {
+    borderRadius: 14,
+    paddingVertical: Spacing.three,
+    alignItems: 'center',
+    marginTop: Spacing.five,
+    backgroundColor: palette.backgroundElement,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.border,
+  },
+  checkStatusLabel: {
+    color: palette.text,
+    fontSize: 16,
+    fontWeight: '700',
+  },
   editButton: {
     marginTop: Spacing.three,
     alignItems: 'center',
@@ -388,10 +546,18 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
   },
+  statusBody: {
+    color: palette.textSecondary,
+    fontSize: 13,
+    fontWeight: '500',
+    textAlign: 'center',
+    maxWidth: 280,
+  },
   successHash: {
     color: palette.textSecondary,
     fontFamily: 'ui-monospace',
     fontSize: 14,
     fontWeight: '500',
+    marginTop: Spacing.one,
   },
 });

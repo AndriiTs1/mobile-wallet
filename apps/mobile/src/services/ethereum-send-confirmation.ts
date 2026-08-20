@@ -37,14 +37,29 @@ export type EthereumSendConfirmationErrorReason =
  * `EthereumSendPreparationError`'s discipline: a `reason` code plus a
  * generic, non-descriptive message — never a native error string, RPC URL,
  * provider payload, or any signing/key/authentication detail.
+ *
+ * `signerTxHash` (Stage 5G.2.5) is the locally-known hash `signed.txHashHex`
+ * already produced, carried along ONLY for the failure reasons where signing
+ * genuinely succeeded first (`broadcast_rejected`, `broadcast_ambiguous`,
+ * `hash_mismatch`) — `null` for `auth_or_signing_failed`, where no
+ * transaction was ever signed and therefore no hash exists yet. This is the
+ * ONE piece of state a caller needs to resolve an ambiguous/uncertain
+ * outcome via `lookupEthMainnetTransaction` — never a reason to re-sign or
+ * construct a new transaction.
  */
 export class EthereumSendConfirmationError extends Error {
   readonly reason: EthereumSendConfirmationErrorReason;
+  readonly signerTxHash: EthereumTxHash | null;
 
-  constructor(reason: EthereumSendConfirmationErrorReason, message: string) {
+  constructor(
+    reason: EthereumSendConfirmationErrorReason,
+    message: string,
+    signerTxHash: EthereumTxHash | null = null,
+  ) {
     super(message);
     this.name = 'EthereumSendConfirmationError';
     this.reason = reason;
+    this.signerTxHash = signerTxHash;
   }
 }
 
@@ -124,10 +139,12 @@ export async function confirmAndSendEthereumV1(
     // Structurally shouldn't happen — the native signer always returns a
     // well-formed hash (see `WalletNativeEthereumTransactionSigner.swift`)
     // — but this boundary never trusts it blindly either, and a broadcast
-    // is never attempted with an unvalidated hash.
+    // is never attempted with an unvalidated hash. No usable hash exists
+    // here (the one we got back couldn't even be validated), so `null`.
     throw new EthereumSendConfirmationError(
       'hash_mismatch',
       'Something went wrong confirming this transaction. Please try again.',
+      null,
     );
   }
 
@@ -143,12 +160,14 @@ export async function confirmAndSendEthereumV1(
     throw new EthereumSendConfirmationError(
       'broadcast_ambiguous',
       'Transaction status is uncertain. Please wait before trying again.',
+      signerTxHash,
     );
   }
   if (broadcastResult.outcome === 'rejected') {
     throw new EthereumSendConfirmationError(
       'broadcast_rejected',
       'The transaction was not accepted by the network. Please try again.',
+      signerTxHash,
     );
   }
 
@@ -156,6 +175,7 @@ export async function confirmAndSendEthereumV1(
     throw new EthereumSendConfirmationError(
       'hash_mismatch',
       'Something went wrong confirming this transaction. Please try again.',
+      signerTxHash,
     );
   }
 
