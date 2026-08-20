@@ -53,3 +53,27 @@ export function parseEthDecimalStringToWei(input: string): AtomicAmount {
 
   return toAtomicAmount(weiValue.toString(10));
 }
+
+/**
+ * Formats an exact wei `AtomicAmount` as an ETH decimal string for display —
+ * the inverse of `parseEthDecimalStringToWei`, with the same integer-safe
+ * posture: `BigInt` div/mod only, never `Number()`/`parseFloat()`/float
+ * division, so it cannot lose or round precision the way a float-based
+ * `wei / 1e18` would. Trims unnecessary trailing fractional zeros (and the
+ * `.` entirely for a whole-number ETH value) for a clean display string,
+ * while still preserving the exact value: no digit is ever dropped except
+ * trailing zeros, which carry no value.
+ */
+export function formatWeiAsEthDecimalString(wei: AtomicAmount): string {
+  const value = BigInt(wei);
+  const divisor = 10n ** BigInt(WEI_PER_ETH_DECIMALS);
+  const whole = value / divisor;
+  const fraction = value % divisor;
+
+  if (fraction === 0n) {
+    return whole.toString(10);
+  }
+
+  const fractionDigits = fraction.toString(10).padStart(WEI_PER_ETH_DECIMALS, '0').replace(/0+$/, '');
+  return `${whole.toString(10)}.${fractionDigits}`;
+}

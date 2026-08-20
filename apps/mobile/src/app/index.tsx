@@ -1,4 +1,4 @@
-import { Link } from 'expo-router';
+import { Link, useRouter } from 'expo-router';
 import { SymbolView, type SFSymbol } from 'expo-symbols';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -28,6 +28,7 @@ const QUICK_ACTIONS: { label: string; symbol: SFSymbol; glyph: string }[] = [
 ];
 
 export default function HomeScreen() {
+  const router = useRouter();
   const { prices } = useMarketPrices();
 
   const totalValueChf = computeTotalValueChf(mockAssets, prices);
@@ -98,6 +99,9 @@ export default function HomeScreen() {
         {QUICK_ACTIONS.map((action) => (
           <View key={action.label} style={styles.actionItem}>
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={action.label}
+              onPress={action.label === 'Send' ? () => router.push('/send') : undefined}
               style={({ pressed }) => [styles.actionCircle, pressed && styles.actionCirclePressed]}>
               <SymbolView
                 name={{ ios: action.symbol }}

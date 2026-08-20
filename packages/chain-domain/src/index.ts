@@ -17,7 +17,7 @@ export { toEthereumTxHash } from './ethereum-tx-hash';
 export type { AtomicAmount, DecimalString } from './amount';
 export { toAtomicAmount, toDecimalString } from './amount';
 
-export { parseEthDecimalStringToWei } from './ethereum-amount';
+export { parseEthDecimalStringToWei, formatWeiAsEthDecimalString } from './ethereum-amount';
 
 export type { UnixTimestampMs } from './timestamp';
 
