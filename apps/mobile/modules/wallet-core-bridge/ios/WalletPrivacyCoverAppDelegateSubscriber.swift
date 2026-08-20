@@ -61,7 +61,7 @@ public class WalletPrivacyCoverAppDelegateSubscriber: ExpoAppDelegateSubscriber 
       // Already installed — idempotent no-op.
       return
     }
-    guard let window = application.windows.first(where: { $0.isKeyWindow }) else {
+    guard let window = Self.keyWindow() else {
       return
     }
 
@@ -100,5 +100,22 @@ public class WalletPrivacyCoverAppDelegateSubscriber: ExpoAppDelegateSubscriber 
     }
     cover.removeFromSuperview()
     coverView = nil
+  }
+
+  /// The current key window, resolved via `UIApplication.shared.connectedScenes`
+  /// rather than the `UIApplication.windows` property (deprecated since iOS
+  /// 15). This app has no `SceneDelegate`/`UIApplicationSceneManifest`
+  /// entry — it still runs UIKit's classic single-implicit-scene lifecycle
+  /// — so `connectedScenes` always yields exactly the one scene the app
+  /// already has; this is not a scene-based-architecture change, only a
+  /// non-deprecated way to reach the same window this file has always
+  /// attached to. Mirrors the identical, already-established lookup in
+  /// `WalletBackupPhrasePresenter.keyWindowRootViewController()` — no
+  /// second implementation of this pattern.
+  private static func keyWindow() -> UIWindow? {
+    UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .flatMap { $0.windows }
+      .first(where: { $0.isKeyWindow })
   }
 }

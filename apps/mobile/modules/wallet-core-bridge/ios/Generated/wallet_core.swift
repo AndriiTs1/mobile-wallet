@@ -465,6 +465,22 @@ fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
+    typealias FfiType = UInt64
+    typealias SwiftType = UInt64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterString: FfiConverter {
     typealias SwiftType = String
     typealias FfiType = RustBuffer
@@ -739,6 +755,152 @@ public func FfiConverterTypeFfiCreateWalletSecretSession_lower(_ value: FfiCreat
 
 
 /**
+ * PUBLIC-SAFE (input/output shape only — this record carries no secret
+ * field). Structured, public V1 Ethereum EIP-1559 transaction intent —
+ * see `signing::EthereumV1TransactionIntent`'s own doc comment for why
+ * wei-denominated quantities are decimal strings, not integers/floats.
+ * No field here can ever hold a private key, seed, entropy, mnemonic,
+ * xpriv, or precomputed signing hash — the Rust struct this converts
+ * to has no such field either.
+ */
+public struct FfiEthereumV1TransactionIntent: Equatable, Hashable {
+    public var chainId: UInt64
+    public var nonce: UInt64
+    public var toHex: String
+    public var valueWeiDecimal: String
+    public var gasLimit: UInt64
+    public var maxFeePerGasWeiDecimal: String
+    public var maxPriorityFeePerGasWeiDecimal: String
+    public var dataHex: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(chainId: UInt64, nonce: UInt64, toHex: String, valueWeiDecimal: String, gasLimit: UInt64, maxFeePerGasWeiDecimal: String, maxPriorityFeePerGasWeiDecimal: String, dataHex: String) {
+        self.chainId = chainId
+        self.nonce = nonce
+        self.toHex = toHex
+        self.valueWeiDecimal = valueWeiDecimal
+        self.gasLimit = gasLimit
+        self.maxFeePerGasWeiDecimal = maxFeePerGasWeiDecimal
+        self.maxPriorityFeePerGasWeiDecimal = maxPriorityFeePerGasWeiDecimal
+        self.dataHex = dataHex
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiEthereumV1TransactionIntent: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiEthereumV1TransactionIntent: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiEthereumV1TransactionIntent {
+        return
+            try FfiEthereumV1TransactionIntent(
+                chainId: FfiConverterUInt64.read(from: &buf), 
+                nonce: FfiConverterUInt64.read(from: &buf), 
+                toHex: FfiConverterString.read(from: &buf), 
+                valueWeiDecimal: FfiConverterString.read(from: &buf), 
+                gasLimit: FfiConverterUInt64.read(from: &buf), 
+                maxFeePerGasWeiDecimal: FfiConverterString.read(from: &buf), 
+                maxPriorityFeePerGasWeiDecimal: FfiConverterString.read(from: &buf), 
+                dataHex: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiEthereumV1TransactionIntent, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.chainId, into: &buf)
+        FfiConverterUInt64.write(value.nonce, into: &buf)
+        FfiConverterString.write(value.toHex, into: &buf)
+        FfiConverterString.write(value.valueWeiDecimal, into: &buf)
+        FfiConverterUInt64.write(value.gasLimit, into: &buf)
+        FfiConverterString.write(value.maxFeePerGasWeiDecimal, into: &buf)
+        FfiConverterString.write(value.maxPriorityFeePerGasWeiDecimal, into: &buf)
+        FfiConverterString.write(value.dataHex, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiEthereumV1TransactionIntent_lift(_ buf: RustBuffer) throws -> FfiEthereumV1TransactionIntent {
+    return try FfiConverterTypeFfiEthereumV1TransactionIntent.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiEthereumV1TransactionIntent_lower(_ value: FfiEthereumV1TransactionIntent) -> RustBuffer {
+    return FfiConverterTypeFfiEthereumV1TransactionIntent.lower(value)
+}
+
+
+/**
+ * PUBLIC-SAFE. The only thing `dangerous_native_only_sign_ethereum_transaction_v1`
+ * ever returns on success: a signed transaction and its hash, both
+ * non-secret, both hex-encoded. Safe to forward to React Native.
+ */
+public struct FfiSignedEthereumV1Transaction: Equatable, Hashable {
+    public var signedTxHex: String
+    public var txHashHex: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(signedTxHex: String, txHashHex: String) {
+        self.signedTxHex = signedTxHex
+        self.txHashHex = txHashHex
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiSignedEthereumV1Transaction: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiSignedEthereumV1Transaction: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSignedEthereumV1Transaction {
+        return
+            try FfiSignedEthereumV1Transaction(
+                signedTxHex: FfiConverterString.read(from: &buf), 
+                txHashHex: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiSignedEthereumV1Transaction, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.signedTxHex, into: &buf)
+        FfiConverterString.write(value.txHashHex, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSignedEthereumV1Transaction_lift(_ buf: RustBuffer) throws -> FfiSignedEthereumV1Transaction {
+    return try FfiConverterTypeFfiSignedEthereumV1Transaction.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSignedEthereumV1Transaction_lower(_ value: FfiSignedEthereumV1Transaction) -> RustBuffer {
+    return FfiConverterTypeFfiSignedEthereumV1Transaction.lower(value)
+}
+
+
+/**
  * PUBLIC-SAFE. Safe to forward to React Native. Explicit, minimal
  * conversion from the internal `V1WalletAddresses` (Stage 5D.2/5D.4) —
  * no new derivation logic.
@@ -798,6 +960,106 @@ public func FfiConverterTypeFfiV1WalletAddresses_lift(_ buf: RustBuffer) throws 
 #endif
 public func FfiConverterTypeFfiV1WalletAddresses_lower(_ value: FfiV1WalletAddresses) -> RustBuffer {
     return FfiConverterTypeFfiV1WalletAddresses.lower(value)
+}
+
+
+/**
+ * Structural, non-secret error categories — mirrors
+ * `signing::EthereumSigningError` exactly. No String/Debug payload, no
+ * secret value, no OS/crypto-library error detail.
+ */
+public 
+enum FfiEthereumSigningError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+    
+    
+    case InvalidDestinationAddress
+    case InvalidChainId
+    case InvalidNumericField
+    case InvalidCalldata
+    case SigningFailed
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
+}
+
+#if compiler(>=6)
+extension FfiEthereumSigningError: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiEthereumSigningError: FfiConverterRustBuffer {
+    typealias SwiftType = FfiEthereumSigningError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiEthereumSigningError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .InvalidDestinationAddress
+        case 2: return .InvalidChainId
+        case 3: return .InvalidNumericField
+        case 4: return .InvalidCalldata
+        case 5: return .SigningFailed
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiEthereumSigningError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case .InvalidDestinationAddress:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .InvalidChainId:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .InvalidNumericField:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .InvalidCalldata:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .SigningFailed:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiEthereumSigningError_lift(_ buf: RustBuffer) throws -> FfiEthereumSigningError {
+    return try FfiConverterTypeFfiEthereumSigningError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiEthereumSigningError_lower(_ value: FfiEthereumSigningError) -> RustBuffer {
+    return FfiConverterTypeFfiEthereumSigningError.lower(value)
 }
 
 
@@ -964,6 +1226,39 @@ public func dangerousNativeOnlyMnemonicFromEntropyV1(entropy: Data)throws  -> St
     )
 })
 }
+/**
+ * NATIVE-ONLY DANGEROUS, Stage 5G.1. Takes caller-owned entropy (the
+ * exact bytes `WalletSecureStorage.read()` returns, native-side —
+ * best-effort zeroed before this function returns, mirroring
+ * `dangerous_native_only_mnemonic_from_entropy_v1` above) plus a
+ * structured, public transaction intent. Reconstructs the mnemonic and
+ * derives the seed internally (empty passphrase — matches
+ * `create_wallet_v1`'s current V1-only behavior; a passphrase-protected
+ * imported wallet is out of this stage's scope, see the report's Risks
+ * section), derives the Ethereum V1 signing key internally, validates
+ * and signs the transaction, and returns ONLY the signed transaction
+ * hex and its hash. The private key never leaves this function — it is
+ * never returned, never logged, and this function has no code path
+ * that could expose it. Never call this from any path reachable by
+ * Expo `Function(...)`/`AsyncFunction(...)`.
+ *
+ * Single sensitive native operation, by design (Stage 5G.1's own audit
+ * conclusion, §D): there is no separate "authorize signing" call and no
+ * reusable authorization/session state anywhere in this crate — the
+ * native caller (a future `WalletEthereumSigningPresenter`-style
+ * orchestrator, not built in this stage) is expected to perform its
+ * own fresh `WalletBiometricAuthorizer.authorize(...)` immediately
+ * before calling this function, every single time.
+ */
+public func dangerousNativeOnlySignEthereumTransactionV1(entropy: Data, intent: FfiEthereumV1TransactionIntent)throws  -> FfiSignedEthereumV1Transaction  {
+    return try  FfiConverterTypeFfiSignedEthereumV1Transaction_lift(try rustCallWithError(FfiConverterTypeFfiEthereumSigningError_lift) {
+        uniffiCallStatus in
+    uniffi_wallet_core_fn_func_dangerous_native_only_sign_ethereum_transaction_v1(
+        FfiConverterData.lower(entropy),
+        FfiConverterTypeFfiEthereumV1TransactionIntent_lower(intent),uniffiCallStatus
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -990,6 +1285,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallet_core_checksum_func_dangerous_native_only_mnemonic_from_entropy_v1() != 58891) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallet_core_checksum_func_dangerous_native_only_sign_ethereum_transaction_v1() != 58861) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallet_core_checksum_method_fficreatewalletsecretsession_addresses() != 42244) {

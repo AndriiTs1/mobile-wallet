@@ -10,6 +10,27 @@ crate-type = ["lib", "cdylib", "staticlib"]
 bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize"] }
 bitcoin = { version = "0.32.7", default-features = false, features = ["std"] }
 getrandom = { version = "0.4.3", default-features = false }
+# rlp: Stage 5G.1 (Ethereum EIP-1559 transaction signing). Needed for RLP
+# encoding of the typed (0x02) transaction payload — no existing dependency
+# implements RLP. `rlp` (paritytech/parity-common) is the long-established,
+# widely-used Rust RLP implementation across the Ethereum/Substrate
+# ecosystem; only its "std" feature is enabled — "derive"/"rlp-derive" are
+# not needed since every field is encoded manually, and are left disabled to
+# avoid pulling in their proc-macro dependency subtree.
+rlp = { version = "0.6.1", default-features = false, features = ["std"] }
+# secp256k1 is already an existing TRANSITIVE dependency (via `bitcoin`) for
+# every other secp256k1 operation this crate performs (see `derivation`
+# module). It is made a direct dependency here solely to enable its
+# "recovery" feature, which `bitcoin`'s own default feature set does not
+# request and which Stage 5G.1's signing needs (to produce an EIP-1559
+# transaction's y-parity field) — this is not a new cryptographic library,
+# just an explicit feature request against the one already-audited secp256k1
+# build this crate links against (Cargo unifies the feature set into a
+# single compiled instance shared with `bitcoin`).
+secp256k1 = { version = "0.29.1", default-features = false, features = [
+  "std",
+  "recovery",
+] }
 sha3 = { version = "0.12.0", default-features = false }
 zeroize = { version = "1.9.0", default-features = false }
 # default-features = false: uniffi's "default" feature set pulls in cargo_metadata

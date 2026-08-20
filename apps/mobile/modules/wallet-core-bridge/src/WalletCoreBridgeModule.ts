@@ -1,5 +1,7 @@
 import { NativeModule, requireNativeModule } from 'expo';
 
+import type { EthereumV1SignedTransaction, EthereumV1TransactionIntent } from './WalletCoreBridge.types';
+
 declare class WalletCoreBridgeModule extends NativeModule<{}> {
   getVersion(): string;
   healthCheck(): string;
@@ -47,6 +49,18 @@ declare class WalletCoreBridgeModule extends NativeModule<{}> {
   // each of those independently performs its own fresh native
   // authentication regardless of this call's outcome.
   requestAppUnlock(): Promise<void>;
+  // Stage 5G.1: the ONE production Ethereum V1 transaction-signing bridge
+  // operation. Takes only a structured, public transaction intent — never
+  // a private key, seed, entropy, mnemonic, xpriv, or precomputed signing
+  // hash; EthereumV1TransactionIntent has no field that could carry one.
+  // Native device-owner authentication (Face ID/Touch ID/passcode
+  // fallback) must succeed FIRST, fresh, every single call — never
+  // satisfied by requestAppUnlock or requestRevealBackup, and never
+  // cached/reused across calls. Resolves with only the signed transaction
+  // hex and its hash; rejects with a generic, non-descriptive error on any
+  // failure (authentication or signing). The private key never crosses
+  // this boundary, or any boundary — it never leaves native Rust code.
+  signEthereumTransactionV1(intent: EthereumV1TransactionIntent): Promise<EthereumV1SignedTransaction>;
   // Stage 5E.9E2: DEV-ONLY. Only exists as a callable native method in
   // DEBUG builds (the underlying Swift Function is compiled out entirely
   // in Release — see WalletCoreBridgeModule.swift) — RN must only ever

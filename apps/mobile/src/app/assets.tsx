@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { AssetRow } from '@/components/asset-row';
 import { BitcoinAddressProof } from '@/components/dev/bitcoin-address-proof';
 import { EthereumBalanceProof } from '@/components/dev/ethereum-balance-proof';
+import { EthereumSigningProof } from '@/components/dev/ethereum-signing-proof';
 import { WalletCoreProof } from '@/components/dev/wallet-core-proof';
 import { ScreenHeader } from '@/components/screen-header';
 import { ScreenScaffold } from '@/components/screen-scaffold';
@@ -74,6 +75,7 @@ export default function AssetsScreen() {
       {__DEV__ ? <EthereumBalanceProof /> : null}
       {__DEV__ ? <BitcoinAddressProof /> : null}
       {__DEV__ ? <WalletCoreProof /> : null}
+      {__DEV__ ? <EthereumSigningProof /> : null}
     </ScreenScaffold>
   );
 }

@@ -1,5 +1,32 @@
 import ExpoModulesCore
 
+// Stage 5G.1 — RN-facing structured V1 Ethereum EIP-1559 transaction
+// intent. Every field is public transaction data; the three
+// wei-denominated quantities are strings specifically to avoid JS
+// floating-point precision loss crossing this boundary (chainId/nonce/
+// gasLimit are safe as plain numbers — their realistic range never
+// approaches JS's safe-integer limit). No field here can ever hold a
+// private key, seed, entropy, mnemonic, xpriv, or precomputed signing
+// hash — see WalletNativeEthereumTransactionSigner.swift's own doc
+// comment for the full trust-boundary design this shape serves.
+struct EthereumV1TransactionIntentInput: Record {
+  @Field var chainId: UInt64 = 0
+  @Field var nonce: UInt64 = 0
+  @Field var toHex: String = ""
+  @Field var valueWeiDecimal: String = ""
+  @Field var gasLimit: UInt64 = 0
+  @Field var maxFeePerGasWeiDecimal: String = ""
+  @Field var maxPriorityFeePerGasWeiDecimal: String = ""
+  @Field var dataHex: String = ""
+}
+
+// Stage 5G.1 — the only thing signEthereumTransactionV1 ever resolves
+// with. Both fields are non-secret and hex-encoded.
+struct EthereumV1SignedTransactionOutput: Record {
+  @Field var signedTxHex: String = ""
+  @Field var txHashHex: String = ""
+}
+
 public class WalletCoreBridgeModule: Module {
   public func definition() -> ModuleDefinition {
     Name("WalletCoreBridge")
@@ -89,6 +116,47 @@ public class WalletCoreBridgeModule: Module {
     // to reuse this specific authorization for a different operation.
     AsyncFunction("requestAppUnlock") {
       try await WalletBiometricAuthorizer.authorize(reason: "Unlock Mobile Wallet")
+    }
+
+    // Stage 5G.1: the ONE production Ethereum V1 transaction-signing bridge
+    // operation. RN passes only a structured, public transaction intent
+    // (EthereumV1TransactionIntentInput, above) — never a private key,
+    // seed, entropy, mnemonic, xpriv, or precomputed signing hash; there is
+    // no field in that shape that could carry one. Composes
+    // WalletNativeEthereumTransactionSigner.sign(intent:) exactly: fresh
+    // WalletBiometricAuthorizer authorization FIRST, only then
+    // WalletSecureStorage.read(), only then the one Rust signing call —
+    // see that file's own doc comment for the full, fixed ordering and for
+    // why there is no separate "authorize signing" call and no reusable
+    // authorization/session state anywhere in this pipeline. Resolves with
+    // only the signed transaction hex and its hash (EthereumV1SignedTransactionOutput,
+    // above); rejects with a generic, non-descriptive error on any failure
+    // — WalletEthereumSigningError is already a small, closed,
+    // OS/crypto-detail-free error surface, so nothing further is wrapped
+    // here.
+    //
+    // SECURITY: this authorization is completely independent from
+    // requestAppUnlock and requestRevealBackup — being currently unlocked,
+    // or having recently revealed the recovery phrase, never satisfies or
+    // substitutes for this call's own fresh authentication (ADR-005 §10;
+    // this stage's own pre-implementation audit §D).
+    AsyncFunction("signEthereumTransactionV1") { (intent: EthereumV1TransactionIntentInput) -> EthereumV1SignedTransactionOutput in
+      let signed = try await WalletNativeEthereumTransactionSigner.sign(
+        intent: WalletEthereumV1TransactionIntent(
+          chainId: intent.chainId,
+          nonce: intent.nonce,
+          toHex: intent.toHex,
+          valueWeiDecimal: intent.valueWeiDecimal,
+          gasLimit: intent.gasLimit,
+          maxFeePerGasWeiDecimal: intent.maxFeePerGasWeiDecimal,
+          maxPriorityFeePerGasWeiDecimal: intent.maxPriorityFeePerGasWeiDecimal,
+          dataHex: intent.dataHex
+        )
+      )
+      let output = EthereumV1SignedTransactionOutput()
+      output.signedTxHex = signed.signedTxHex
+      output.txHashHex = signed.txHashHex
+      return output
     }
 
     #if DEBUG

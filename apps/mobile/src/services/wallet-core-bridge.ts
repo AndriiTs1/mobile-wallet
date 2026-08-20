@@ -10,6 +10,13 @@
  * Expo boundary in the first place (see `WalletCoreBridgeModule.swift`/`.ts`).
  */
 
+import type {
+  EthereumV1SignedTransaction,
+  EthereumV1TransactionIntent,
+} from '../../modules/wallet-core-bridge/src/WalletCoreBridge.types';
+
+export type { EthereumV1SignedTransaction, EthereumV1TransactionIntent };
+
 type WalletCoreBridgeApi = {
   hasWallet(): boolean;
   createWalletAndPresentBackup(): Promise<void>;
@@ -18,6 +25,7 @@ type WalletCoreBridgeApi = {
   presentBackupPhrasePreview(): Promise<void>;
   requestRevealBackup(): Promise<void>;
   requestAppUnlock(): Promise<void>;
+  signEthereumTransactionV1(intent: EthereumV1TransactionIntent): Promise<EthereumV1SignedTransaction>;
 };
 
 /**
@@ -160,4 +168,30 @@ export function requestAppUnlock(): Promise<void> {
     return Promise.reject(new Error('Native Wallet Core module unavailable in this runtime.'));
   }
   return bridge.requestAppUnlock();
+}
+
+/**
+ * Stage 5G.1 — the ONE production Ethereum V1 transaction-signing bridge
+ * operation. `intent` must contain only public transaction fields (see
+ * `EthereumV1TransactionIntent`) — never a private key, seed, entropy,
+ * mnemonic, xpriv, or precomputed signing hash; there is no field in that
+ * type that could carry one. Native device-owner authentication (Face ID/
+ * Touch ID/passcode fallback) must succeed FIRST, fresh, on every single
+ * call — it is never satisfied by `requestAppUnlock` or
+ * `requestRevealBackup`, and nothing about a prior successful call to this
+ * function satisfies a later one either. Resolves with only the signed
+ * transaction hex and its hash; rejects with a generic, non-descriptive
+ * error on any failure (authentication or signing) — never any secret,
+ * authentication state, or OS/crypto error detail. The private key never
+ * crosses this boundary, or any boundary — it never leaves native Rust
+ * code.
+ */
+export function signEthereumTransactionV1(
+  intent: EthereumV1TransactionIntent
+): Promise<EthereumV1SignedTransaction> {
+  const bridge = loadWalletCoreBridge();
+  if (!bridge) {
+    return Promise.reject(new Error('Native Wallet Core module unavailable in this runtime.'));
+  }
+  return bridge.signEthereumTransactionV1(intent);
 }

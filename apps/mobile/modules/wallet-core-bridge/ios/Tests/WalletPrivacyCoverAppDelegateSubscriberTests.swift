@@ -114,6 +114,17 @@ final class WalletPrivacyCoverAppDelegateSubscriberTests: XCTestCase {
         XCTAssertFalse(source.contains("UIWindow("), "must attach to the existing key window, never construct a new UIWindow")
     }
 
+    // MARK: - 10b: key window is resolved via the non-deprecated
+    // connectedScenes API, not the deprecated UIApplication.windows
+
+    func testKeyWindowIsResolvedViaConnectedScenesNotDeprecatedApplicationWindows() throws {
+        let source = try codeOnlySource(of: "WalletPrivacyCoverAppDelegateSubscriber.swift")
+        XCTAssertFalse(source.contains("application.windows"), "must not use the deprecated (iOS 15+) UIApplication.windows lookup")
+        XCTAssertTrue(source.contains("UIApplication.shared.connectedScenes"))
+        XCTAssertTrue(source.contains("compactMap { $0 as? UIWindowScene }"))
+        XCTAssertTrue(source.contains("guard let window = Self.keyWindow() else {"))
+    }
+
     // MARK: - 11: no timer/delay is introduced
 
     func testNoTimerOrDelayIntroduced() throws {

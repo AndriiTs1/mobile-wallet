@@ -136,7 +136,11 @@ mod derivation {
 
     /// Encodes a 20-byte Ethereum address as an EIP-55 mixed-case checksummed,
     /// `0x`-prefixed hex string (ADR-003 §8).
-    fn to_eip55_checksum_address(address_bytes: &[u8]) -> String {
+    ///
+    /// `pub(crate)`, not private: Stage 5G.1's `signing` module reuses this
+    /// exact function to validate a caller-supplied mixed-case destination
+    /// address's checksum — no second EIP-55 implementation.
+    pub(crate) fn to_eip55_checksum_address(address_bytes: &[u8]) -> String {
         let lower_hex = to_lower_hex(address_bytes);
         let hash = Keccak256::digest(lower_hex.as_bytes());
 
@@ -161,7 +165,11 @@ mod derivation {
     }
 
     /// Lowercase hex encoding, no `0x` prefix.
-    fn to_lower_hex(bytes: &[u8]) -> String {
+    ///
+    /// `pub(crate)`, not private: Stage 5G.1's `signing` module reuses this
+    /// to render the signed-transaction/tx-hash hex strings — no second hex
+    /// encoder.
+    pub(crate) fn to_lower_hex(bytes: &[u8]) -> String {
         let mut out = String::with_capacity(bytes.len() * 2);
         for byte in bytes {
             write!(out, "{byte:02x}").expect("writing to a String never fails");
@@ -390,6 +398,327 @@ mod wallet_secret {
     }
 }
 
+/// Ethereum V1 EIP-1559 (type 0x02) transaction signing, Stage 5G.1.
+///
+/// Rust-internal only: not exposed via UniFFI directly (see `mod ffi`'s
+/// thin wrapper below). Composes the existing `derivation::derive_v1`
+/// (Stage 5B.3) for key derivation — no second derivation implementation.
+/// The derived `Xpriv`/`SecretKey` never leaves this module; only the
+/// public, non-secret signed-transaction hex/hash cross out of it.
+///
+/// Trust-boundary design (ADR-002 §4 invariants 4/7): `ValidatedEthereumV1Transaction`
+/// deliberately holds no caller-supplied signing hash field — the signing
+/// hash is always computed here, from these validated fields, via the
+/// canonical EIP-1559 RLP encoding. There is no code path in this module
+/// that accepts an opaque hash/bytes blob and signs it blindly.
+mod signing {
+    use super::derivation::{V1DerivationPath, derive_v1, to_eip55_checksum_address, to_lower_hex};
+    use secp256k1::{Message, Secp256k1, SecretKey};
+    use sha3::{Digest, Keccak256};
+
+    /// Structural, non-secret error categories. Never carries a secret
+    /// value, a raw crypto-library error, or an RN-suppliable hash —
+    /// mirrors `WalletError`'s closed-enum-of-variant-names discipline.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(crate) enum EthereumSigningError {
+        InvalidDestinationAddress,
+        InvalidChainId,
+        InvalidNumericField,
+        InvalidCalldata,
+        SigningFailed,
+    }
+
+    /// Caller-supplied, not-yet-validated V1 Ethereum transaction intent —
+    /// only public transaction fields, never a private key, seed, entropy,
+    /// mnemonic, xpriv, or precomputed signing hash.
+    ///
+    /// Every wei-denominated quantity (`value_wei_decimal`,
+    /// `max_fee_per_gas_wei_decimal`, `max_priority_fee_per_gas_wei_decimal`)
+    /// is a decimal-digit `String`, never a floating-point type — wei
+    /// amounts routinely exceed JS's safe-integer/float-precision range.
+    /// `chain_id`/`nonce`/`gas_limit` are plain integers: their realistic
+    /// range never approaches any floating-point precision limit, so no
+    /// string indirection is needed for them.
+    #[derive(Debug, Clone)]
+    pub(crate) struct EthereumV1TransactionIntent {
+        pub chain_id: u64,
+        pub nonce: u64,
+        pub to_hex: String,
+        pub value_wei_decimal: String,
+        pub gas_limit: u64,
+        pub max_fee_per_gas_wei_decimal: String,
+        pub max_priority_fee_per_gas_wei_decimal: String,
+        pub data_hex: String,
+    }
+
+    /// A structurally validated EIP-1559 V1 Ethereum transaction — every
+    /// field has already been format/range checked (ADR-002 §4 invariant 4)
+    /// before a value of this type can exist. All fields are public
+    /// transaction data, safe to log structurally (never derived from or
+    /// containing secret material).
+    #[derive(Debug, PartialEq, Eq)]
+    pub(crate) struct ValidatedEthereumV1Transaction {
+        pub chain_id: u64,
+        pub nonce: u64,
+        pub to: [u8; 20],
+        pub value_wei: u128,
+        pub gas_limit: u64,
+        pub max_fee_per_gas_wei: u128,
+        pub max_priority_fee_per_gas_wei: u128,
+        pub data: Vec<u8>,
+    }
+
+    /// The only value this module ever returns to a caller: a signed
+    /// transaction and its hash, both non-secret, both hex-encoded.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(crate) struct SignedEthereumV1Transaction {
+        pub signed_tx_hex: String,
+        pub tx_hash_hex: String,
+    }
+
+    impl EthereumV1TransactionIntent {
+        /// Structural validation (ADR-002 §4 invariant 4): rejects
+        /// malformed/unsupported input before any signing is attempted.
+        /// Every field is independently checked; no field is trusted
+        /// merely because another field is valid.
+        pub(crate) fn validate(
+            &self,
+        ) -> Result<ValidatedEthereumV1Transaction, EthereumSigningError> {
+            if self.chain_id == 0 {
+                return Err(EthereumSigningError::InvalidChainId);
+            }
+            if self.gas_limit == 0 {
+                return Err(EthereumSigningError::InvalidNumericField);
+            }
+
+            let to = parse_ethereum_address(&self.to_hex)?;
+
+            let value_wei = parse_decimal_u128(&self.value_wei_decimal)
+                .ok_or(EthereumSigningError::InvalidNumericField)?;
+            let max_fee_per_gas_wei = parse_decimal_u128(&self.max_fee_per_gas_wei_decimal)
+                .ok_or(EthereumSigningError::InvalidNumericField)?;
+            let max_priority_fee_per_gas_wei =
+                parse_decimal_u128(&self.max_priority_fee_per_gas_wei_decimal)
+                    .ok_or(EthereumSigningError::InvalidNumericField)?;
+            // EIP-1559 balanced-arithmetic structural check (ADR-002 §4
+            // invariant 7): the priority fee can never exceed the max fee.
+            if max_priority_fee_per_gas_wei > max_fee_per_gas_wei {
+                return Err(EthereumSigningError::InvalidNumericField);
+            }
+
+            let data =
+                parse_hex_bytes(&self.data_hex).ok_or(EthereumSigningError::InvalidCalldata)?;
+
+            Ok(ValidatedEthereumV1Transaction {
+                chain_id: self.chain_id,
+                nonce: self.nonce,
+                to,
+                value_wei,
+                gas_limit: self.gas_limit,
+                max_fee_per_gas_wei,
+                max_priority_fee_per_gas_wei,
+                data,
+            })
+        }
+    }
+
+    /// Parses/validates a `0x`-prefixed, 20-byte Ethereum destination
+    /// address. An all-lowercase or all-uppercase hex body is accepted
+    /// without a checksum requirement; a mixed-case body must match its own
+    /// EIP-55 checksum exactly or is rejected — the same convention
+    /// established wallets use to catch accidental transcription/copy
+    /// corruption, reusing this crate's own already-tested EIP-55 encoder
+    /// (no second checksum implementation).
+    fn parse_ethereum_address(hex: &str) -> Result<[u8; 20], EthereumSigningError> {
+        let stripped = hex
+            .strip_prefix("0x")
+            .ok_or(EthereumSigningError::InvalidDestinationAddress)?;
+        if stripped.len() != 40 {
+            return Err(EthereumSigningError::InvalidDestinationAddress);
+        }
+
+        let mut bytes = [0u8; 20];
+        for i in 0..20 {
+            let byte_str = &stripped[i * 2..i * 2 + 2];
+            bytes[i] = u8::from_str_radix(byte_str, 16)
+                .map_err(|_| EthereumSigningError::InvalidDestinationAddress)?;
+        }
+
+        let has_upper = stripped.chars().any(|c| c.is_ascii_uppercase());
+        let has_lower = stripped.chars().any(|c| c.is_ascii_lowercase());
+        if has_upper && has_lower {
+            let expected = to_eip55_checksum_address(&bytes);
+            if expected != hex {
+                return Err(EthereumSigningError::InvalidDestinationAddress);
+            }
+        }
+
+        Ok(bytes)
+    }
+
+    /// Parses a plain (no sign, no separators, no leading `0x`) decimal
+    /// digit string into a `u128`. `u128` comfortably covers any realistic
+    /// wei-denominated quantity for native ETH (total supply is ~1.2 * 10^26
+    /// wei, far under `u128::MAX`'s ~3.4 * 10^38) without needing a full
+    /// 256-bit integer type.
+    fn parse_decimal_u128(input: &str) -> Option<u128> {
+        if input.is_empty() || input.len() > 39 || !input.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        input.parse::<u128>().ok()
+    }
+
+    /// Parses a `0x`-prefixed even-length hex byte string (`"0x"` alone
+    /// means empty calldata). Structural format validation only — this
+    /// module never interprets or decodes the *meaning* of calldata (e.g.
+    /// as an ERC-20 `transfer` call); that belongs to a future Send/Review
+    /// stage, out of this stage's scope.
+    fn parse_hex_bytes(input: &str) -> Option<Vec<u8>> {
+        let stripped = input.strip_prefix("0x")?;
+        if stripped.len() % 2 != 0 {
+            return None;
+        }
+        (0..stripped.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&stripped[i..i + 2], 16).ok())
+            .collect()
+    }
+
+    /// Strips leading zero bytes, matching RLP's canonical "positive
+    /// integer" encoding rule (no leading zero bytes; zero itself encodes
+    /// as the empty string) — used for the ECDSA signature's `r`/`s`
+    /// fields, which the `rlp` crate's own `u128`/`u64` integer helpers
+    /// cannot represent (secp256k1 signature scalars can exceed 16 bytes).
+    fn strip_leading_zeros(bytes: &[u8]) -> &[u8] {
+        match bytes.iter().position(|&b| b != 0) {
+            Some(index) => &bytes[index..],
+            None => &[],
+        }
+    }
+
+    /// The canonical EIP-1559 unsigned-transaction RLP payload (the exact
+    /// preimage this module hashes and signs):
+    /// `0x02 || rlp([chain_id, nonce, max_priority_fee_per_gas, max_fee_per_gas,
+    /// gas_limit, to, value, data, access_list])`. `access_list` is always
+    /// the empty list — access-list support is out of this V1 stage's
+    /// scope.
+    pub(crate) fn rlp_encode_unsigned(tx: &ValidatedEthereumV1Transaction) -> Vec<u8> {
+        let mut stream = rlp::RlpStream::new();
+        stream.begin_list(9);
+        stream.append(&tx.chain_id);
+        stream.append(&tx.nonce);
+        stream.append(&tx.max_priority_fee_per_gas_wei);
+        stream.append(&tx.max_fee_per_gas_wei);
+        stream.append(&tx.gas_limit);
+        stream.append(&tx.to.to_vec());
+        stream.append(&tx.value_wei);
+        stream.append(&tx.data);
+        stream.begin_list(0);
+
+        let rlp_body = stream.out();
+        let mut out = Vec::with_capacity(1 + rlp_body.len());
+        out.push(0x02u8);
+        out.extend_from_slice(&rlp_body);
+        out
+    }
+
+    /// The canonical EIP-1559 signed-transaction RLP encoding: the same 9
+    /// fields as `rlp_encode_unsigned`, plus `y_parity`, `r`, `s`.
+    fn rlp_encode_signed(
+        tx: &ValidatedEthereumV1Transaction,
+        y_parity: u8,
+        r: [u8; 32],
+        s: [u8; 32],
+    ) -> Vec<u8> {
+        let mut stream = rlp::RlpStream::new();
+        stream.begin_list(12);
+        stream.append(&tx.chain_id);
+        stream.append(&tx.nonce);
+        stream.append(&tx.max_priority_fee_per_gas_wei);
+        stream.append(&tx.max_fee_per_gas_wei);
+        stream.append(&tx.gas_limit);
+        stream.append(&tx.to.to_vec());
+        stream.append(&tx.value_wei);
+        stream.append(&tx.data);
+        stream.begin_list(0);
+        stream.append(&y_parity);
+        stream.append(&strip_leading_zeros(&r).to_vec());
+        stream.append(&strip_leading_zeros(&s).to_vec());
+
+        let rlp_body = stream.out();
+        let mut out = Vec::with_capacity(1 + rlp_body.len());
+        out.push(0x02u8);
+        out.extend_from_slice(&rlp_body);
+        out
+    }
+
+    fn keccak256(bytes: &[u8]) -> [u8; 32] {
+        let digest = Keccak256::digest(bytes);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest);
+        out
+    }
+
+    /// Signs an already-validated transaction with a caller-owned secret
+    /// key. Deliberately takes `&SecretKey`, not a seed: this is the
+    /// signing-algorithm layer, independent of key derivation, so it can be
+    /// exercised directly against a known-answer key in tests without going
+    /// through BIP-32 derivation at all. Never erases `secret_key` itself —
+    /// it is borrowed, not owned; the caller (`sign_validated_ethereum_v1_transaction`
+    /// below) is responsible for erasing its own owned copy.
+    pub(crate) fn sign_validated_with_key(
+        secret_key: &SecretKey,
+        tx: &ValidatedEthereumV1Transaction,
+    ) -> Result<SignedEthereumV1Transaction, EthereumSigningError> {
+        let unsigned = rlp_encode_unsigned(tx);
+        let signing_hash = keccak256(&unsigned);
+
+        let secp = Secp256k1::new();
+        let message = Message::from_digest(signing_hash);
+        let recoverable_sig = secp.sign_ecdsa_recoverable(&message, secret_key);
+        let (recovery_id, compact) = recoverable_sig.serialize_compact();
+
+        let y_parity = match recovery_id.to_i32() {
+            0 => 0u8,
+            1 => 1u8,
+            // Not expected for an uncompressed-recovery ECDSA signature on
+            // this curve in practice; fails closed rather than panicking or
+            // silently truncating an unexpected recovery id.
+            _ => return Err(EthereumSigningError::SigningFailed),
+        };
+        let mut r = [0u8; 32];
+        r.copy_from_slice(&compact[..32]);
+        let mut s = [0u8; 32];
+        s.copy_from_slice(&compact[32..]);
+
+        let signed = rlp_encode_signed(tx, y_parity, r, s);
+        let tx_hash = keccak256(&signed);
+
+        Ok(SignedEthereumV1Transaction {
+            signed_tx_hex: format!("0x{}", to_lower_hex(&signed)),
+            tx_hash_hex: format!("0x{}", to_lower_hex(&tx_hash)),
+        })
+    }
+
+    /// Derives the Ethereum V1 key from `seed` (composing the existing
+    /// `derivation::derive_v1` unchanged — no second derivation
+    /// implementation), signs `tx`, then best-effort erases its own local
+    /// copy of the derived private key before returning. `seed` itself is
+    /// caller-owned and not erased here — the caller (`mod ffi` below)
+    /// owns that lifetime.
+    pub(crate) fn sign_validated_ethereum_v1_transaction(
+        seed: &[u8],
+        tx: &ValidatedEthereumV1Transaction,
+    ) -> Result<SignedEthereumV1Transaction, EthereumSigningError> {
+        let mut xpriv = derive_v1(seed, V1DerivationPath::EthereumV1);
+        let result = sign_validated_with_key(&xpriv.private_key, tx);
+        // Best-effort erase; see the `derivation` module's own note on
+        // Copy-type erasure limitations.
+        xpriv.private_key.non_secure_erase();
+        result
+    }
+}
+
 /// Native-only UniFFI FFI surface, Stage 5D.8B.
 ///
 /// Everything here is reachable from Swift/Kotlin (UniFFI exports must be
@@ -404,6 +733,7 @@ mod wallet_secret {
 /// entropy and the mnemonic sentence cross here, and only through the two
 /// explicitly named dangerous accessors below.
 mod ffi {
+    use super::signing;
     use super::wallet_secret;
 
     /// PUBLIC-SAFE. Safe to forward to React Native. Explicit, minimal
@@ -551,6 +881,137 @@ mod ffi {
             .map_err(FfiWalletError::from);
         entropy.fill(0);
         result
+    }
+
+    /// PUBLIC-SAFE (input/output shape only — this record carries no secret
+    /// field). Structured, public V1 Ethereum EIP-1559 transaction intent —
+    /// see `signing::EthereumV1TransactionIntent`'s own doc comment for why
+    /// wei-denominated quantities are decimal strings, not integers/floats.
+    /// No field here can ever hold a private key, seed, entropy, mnemonic,
+    /// xpriv, or precomputed signing hash — the Rust struct this converts
+    /// to has no such field either.
+    #[derive(uniffi::Record)]
+    pub struct FfiEthereumV1TransactionIntent {
+        pub chain_id: u64,
+        pub nonce: u64,
+        pub to_hex: String,
+        pub value_wei_decimal: String,
+        pub gas_limit: u64,
+        pub max_fee_per_gas_wei_decimal: String,
+        pub max_priority_fee_per_gas_wei_decimal: String,
+        pub data_hex: String,
+    }
+
+    impl From<&FfiEthereumV1TransactionIntent> for signing::EthereumV1TransactionIntent {
+        fn from(intent: &FfiEthereumV1TransactionIntent) -> Self {
+            Self {
+                chain_id: intent.chain_id,
+                nonce: intent.nonce,
+                to_hex: intent.to_hex.clone(),
+                value_wei_decimal: intent.value_wei_decimal.clone(),
+                gas_limit: intent.gas_limit,
+                max_fee_per_gas_wei_decimal: intent.max_fee_per_gas_wei_decimal.clone(),
+                max_priority_fee_per_gas_wei_decimal: intent
+                    .max_priority_fee_per_gas_wei_decimal
+                    .clone(),
+                data_hex: intent.data_hex.clone(),
+            }
+        }
+    }
+
+    /// PUBLIC-SAFE. The only thing `dangerous_native_only_sign_ethereum_transaction_v1`
+    /// ever returns on success: a signed transaction and its hash, both
+    /// non-secret, both hex-encoded. Safe to forward to React Native.
+    #[derive(uniffi::Record, Debug, PartialEq, Eq)]
+    pub struct FfiSignedEthereumV1Transaction {
+        pub signed_tx_hex: String,
+        pub tx_hash_hex: String,
+    }
+
+    impl From<signing::SignedEthereumV1Transaction> for FfiSignedEthereumV1Transaction {
+        fn from(signed: signing::SignedEthereumV1Transaction) -> Self {
+            Self {
+                signed_tx_hex: signed.signed_tx_hex,
+                tx_hash_hex: signed.tx_hash_hex,
+            }
+        }
+    }
+
+    /// Structural, non-secret error categories — mirrors
+    /// `signing::EthereumSigningError` exactly. No String/Debug payload, no
+    /// secret value, no OS/crypto-library error detail.
+    #[derive(uniffi::Error, Debug, PartialEq, Eq)]
+    pub enum FfiEthereumSigningError {
+        InvalidDestinationAddress,
+        InvalidChainId,
+        InvalidNumericField,
+        InvalidCalldata,
+        SigningFailed,
+    }
+
+    impl std::fmt::Display for FfiEthereumSigningError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // Safe: this only ever prints the fixed variant name (via the
+            // derived Debug), never any field — the enum has no fields.
+            write!(f, "{self:?}")
+        }
+    }
+
+    impl From<signing::EthereumSigningError> for FfiEthereumSigningError {
+        fn from(error: signing::EthereumSigningError) -> Self {
+            match error {
+                signing::EthereumSigningError::InvalidDestinationAddress => {
+                    Self::InvalidDestinationAddress
+                }
+                signing::EthereumSigningError::InvalidChainId => Self::InvalidChainId,
+                signing::EthereumSigningError::InvalidNumericField => Self::InvalidNumericField,
+                signing::EthereumSigningError::InvalidCalldata => Self::InvalidCalldata,
+                signing::EthereumSigningError::SigningFailed => Self::SigningFailed,
+            }
+        }
+    }
+
+    /// NATIVE-ONLY DANGEROUS, Stage 5G.1. Takes caller-owned entropy (the
+    /// exact bytes `WalletSecureStorage.read()` returns, native-side —
+    /// best-effort zeroed before this function returns, mirroring
+    /// `dangerous_native_only_mnemonic_from_entropy_v1` above) plus a
+    /// structured, public transaction intent. Reconstructs the mnemonic and
+    /// derives the seed internally (empty passphrase — matches
+    /// `create_wallet_v1`'s current V1-only behavior; a passphrase-protected
+    /// imported wallet is out of this stage's scope, see the report's Risks
+    /// section), derives the Ethereum V1 signing key internally, validates
+    /// and signs the transaction, and returns ONLY the signed transaction
+    /// hex and its hash. The private key never leaves this function — it is
+    /// never returned, never logged, and this function has no code path
+    /// that could expose it. Never call this from any path reachable by
+    /// Expo `Function(...)`/`AsyncFunction(...)`.
+    ///
+    /// Single sensitive native operation, by design (Stage 5G.1's own audit
+    /// conclusion, §D): there is no separate "authorize signing" call and no
+    /// reusable authorization/session state anywhere in this crate — the
+    /// native caller (a future `WalletEthereumSigningPresenter`-style
+    /// orchestrator, not built in this stage) is expected to perform its
+    /// own fresh `WalletBiometricAuthorizer.authorize(...)` immediately
+    /// before calling this function, every single time.
+    #[uniffi::export]
+    pub fn dangerous_native_only_sign_ethereum_transaction_v1(
+        mut entropy: Vec<u8>,
+        intent: FfiEthereumV1TransactionIntent,
+    ) -> Result<FfiSignedEthereumV1Transaction, FfiEthereumSigningError> {
+        let internal_intent = signing::EthereumV1TransactionIntent::from(&intent);
+
+        let result = internal_intent.validate().and_then(|validated| {
+            let mnemonic = wallet_secret::mnemonic_from_canonical_entropy_v1(&entropy)
+                .map_err(|_| signing::EthereumSigningError::SigningFailed)?;
+            let seed = wallet_secret::seed_from_mnemonic(&mnemonic, "");
+            signing::sign_validated_ethereum_v1_transaction(seed.as_slice(), &validated)
+        });
+
+        entropy.fill(0);
+
+        result
+            .map(FfiSignedEthereumV1Transaction::from)
+            .map_err(FfiEthereumSigningError::from)
     }
 }
 
@@ -1248,6 +1709,472 @@ mod tests {
                 dangerous_native_only_mnemonic_from_entropy_v1(Vec::new()),
                 Err(FfiWalletError::InvalidEntropyLength)
             );
+        }
+    }
+
+    mod ethereum_signing {
+        use super::super::signing::{
+            EthereumSigningError, EthereumV1TransactionIntent, rlp_encode_unsigned,
+            sign_validated_ethereum_v1_transaction, sign_validated_with_key,
+        };
+        use secp256k1::ecdsa::{RecoverableSignature, RecoveryId};
+        use secp256k1::{Message, PublicKey, Secp256k1, SecretKey};
+        use sha3::{Digest, Keccak256};
+
+        /// A fixed, widely-published TEST-ONLY secret key (Hardhat/Anvil
+        /// local test-network default account #0's private key) — never a
+        /// real mainnet key, and deliberately NOT derived via this crate's
+        /// own BIP-32 derivation code, so it is a genuinely independent
+        /// ground truth for the reference-vector tests below (independent
+        /// of `derive_v1`, not merely a different call to the same
+        /// derivation function).
+        const REFERENCE_SECRET_KEY_BYTES: [u8; 32] = [
+            0xac, 0x09, 0x74, 0xbe, 0xc3, 0x9a, 0x17, 0xe3, 0x6b, 0xa4, 0xa6, 0xb4, 0xd2, 0x38,
+            0xff, 0x94, 0x4b, 0xac, 0xb4, 0x78, 0xcb, 0xed, 0x5e, 0xfc, 0xae, 0x78, 0x4d, 0x7b,
+            0xf4, 0xf2, 0xff, 0x80,
+        ];
+
+        fn reference_secret_key() -> SecretKey {
+            SecretKey::from_slice(&REFERENCE_SECRET_KEY_BYTES).expect("valid secp256k1 scalar")
+        }
+
+        fn reference_intent() -> EthereumV1TransactionIntent {
+            EthereumV1TransactionIntent {
+                chain_id: 1,
+                nonce: 0,
+                to_hex: "0x000000000000000000000000000000000000dEaD".to_string(),
+                value_wei_decimal: "1000000000000000000".to_string(), // 1 ETH
+                gas_limit: 21000,
+                max_fee_per_gas_wei_decimal: "30000000000".to_string(), // 30 gwei
+                max_priority_fee_per_gas_wei_decimal: "1000000000".to_string(), // 1 gwei
+                data_hex: "0x".to_string(),
+            }
+        }
+
+        /// Independently decodes `signed_tx_hex`'s RLP structure (using the
+        /// `rlp` crate's own *decoder*, a different code path from the
+        /// `RlpStream` *encoder* this crate's signing code uses to produce
+        /// it) and recovers the signer's public key via secp256k1's own
+        /// ECDSA recovery math — mathematically distinct from ECDSA
+        /// signature creation, even though both live in the same
+        /// underlying library. This is not "call the same function again."
+        fn recover_signer_public_key(
+            signed_tx_hex: &str,
+            tx: &super::super::signing::ValidatedEthereumV1Transaction,
+        ) -> PublicKey {
+            let hex_body = signed_tx_hex.strip_prefix("0x").expect("0x-prefixed");
+            let bytes = decode_hex(hex_body);
+            assert_eq!(bytes[0], 0x02, "type-0x02 transaction envelope prefix byte");
+
+            let rlp = rlp::Rlp::new(&bytes[1..]);
+            assert_eq!(rlp.item_count().expect("valid RLP list"), 12);
+            let y_parity: u8 = rlp
+                .at(9)
+                .expect("y_parity field")
+                .as_val()
+                .expect("valid y_parity");
+            let r_bytes = rlp
+                .at(10)
+                .expect("r field")
+                .data()
+                .expect("valid r bytes")
+                .to_vec();
+            let s_bytes = rlp
+                .at(11)
+                .expect("s field")
+                .data()
+                .expect("valid s bytes")
+                .to_vec();
+
+            let mut compact = [0u8; 64];
+            compact[32 - r_bytes.len()..32].copy_from_slice(&r_bytes);
+            compact[64 - s_bytes.len()..64].copy_from_slice(&s_bytes);
+
+            let recovery_id = RecoveryId::from_i32(y_parity as i32).expect("valid recovery id");
+            let recoverable_sig =
+                RecoverableSignature::from_compact(&compact, recovery_id).expect("valid signature");
+
+            let unsigned = rlp_encode_unsigned(tx);
+            let digest = Keccak256::digest(unsigned.as_slice());
+            let mut signing_hash = [0u8; 32];
+            signing_hash.copy_from_slice(&digest);
+            let message = Message::from_digest(signing_hash);
+
+            let secp = Secp256k1::new();
+            secp.recover_ecdsa(&message, &recoverable_sig)
+                .expect("recovery should succeed for a validly-produced signature")
+        }
+
+        fn decode_hex(hex: &str) -> Vec<u8> {
+            (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("valid hex"))
+                .collect()
+        }
+
+        #[test]
+        fn signature_recovers_to_the_known_signer_public_key() {
+            let secret_key = reference_secret_key();
+            let secp = Secp256k1::new();
+            let expected_public_key = PublicKey::from_secret_key(&secp, &secret_key);
+
+            let validated = reference_intent()
+                .validate()
+                .expect("valid reference intent");
+            let signed =
+                sign_validated_with_key(&secret_key, &validated).expect("signing should succeed");
+
+            let recovered = recover_signer_public_key(&signed.signed_tx_hex, &validated);
+            assert_eq!(recovered, expected_public_key);
+        }
+
+        #[test]
+        fn signing_is_deterministic_for_the_same_key_and_transaction() {
+            let secret_key = reference_secret_key();
+            let validated = reference_intent()
+                .validate()
+                .expect("valid reference intent");
+
+            let first = sign_validated_with_key(&secret_key, &validated).expect("signs");
+            let second = sign_validated_with_key(&secret_key, &validated).expect("signs");
+
+            assert_eq!(first, second);
+        }
+
+        #[test]
+        fn signed_tx_hash_is_the_keccak256_of_the_signed_tx_bytes() {
+            let secret_key = reference_secret_key();
+            let validated = reference_intent()
+                .validate()
+                .expect("valid reference intent");
+            let signed = sign_validated_with_key(&secret_key, &validated).expect("signs");
+
+            let signed_bytes = decode_hex(
+                signed
+                    .signed_tx_hex
+                    .strip_prefix("0x")
+                    .expect("0x-prefixed"),
+            );
+            let expected_hash_bytes = Keccak256::digest(signed_bytes.as_slice());
+            let expected_hash_hex = format!("0x{}", hex_encode(&expected_hash_bytes));
+
+            assert_eq!(signed.tx_hash_hex, expected_hash_hex);
+        }
+
+        fn hex_encode(bytes: &[u8]) -> String {
+            bytes.iter().map(|b| format!("{b:02x}")).collect()
+        }
+
+        /// Mutating any single field of an otherwise-identical intent
+        /// changes the resulting signature/hash. Combined with the plain
+        /// fact that neither `EthereumV1TransactionIntent` nor
+        /// `ValidatedEthereumV1Transaction` has a hash field anywhere in
+        /// their definitions (see this module's own source), this
+        /// demonstrates the signing hash is always derived from these
+        /// structured fields — there is no alternate channel by which a
+        /// caller could supply a precomputed hash instead.
+        #[test]
+        fn mutating_any_intent_field_changes_the_signing_result() {
+            let secret_key = reference_secret_key();
+
+            let base_signed = sign_validated_with_key(
+                &secret_key,
+                &reference_intent().validate().expect("valid"),
+            )
+            .expect("signs");
+
+            let mut nonce_changed = reference_intent();
+            nonce_changed.nonce = 1;
+            let nonce_signed =
+                sign_validated_with_key(&secret_key, &nonce_changed.validate().expect("valid"))
+                    .expect("signs");
+            assert_ne!(base_signed, nonce_signed);
+
+            let mut value_changed = reference_intent();
+            value_changed.value_wei_decimal = "2000000000000000000".to_string();
+            let value_signed =
+                sign_validated_with_key(&secret_key, &value_changed.validate().expect("valid"))
+                    .expect("signs");
+            assert_ne!(base_signed, value_signed);
+
+            let mut to_changed = reference_intent();
+            to_changed.to_hex = "0x000000000000000000000000000000000000beef".to_string();
+            let to_signed =
+                sign_validated_with_key(&secret_key, &to_changed.validate().expect("valid"))
+                    .expect("signs");
+            assert_ne!(base_signed, to_signed);
+
+            let mut chain_id_changed = reference_intent();
+            chain_id_changed.chain_id = 11155111; // Sepolia, still a valid chain id
+            let chain_id_signed =
+                sign_validated_with_key(&secret_key, &chain_id_changed.validate().expect("valid"))
+                    .expect("signs");
+            assert_ne!(base_signed, chain_id_signed);
+
+            let mut data_changed = reference_intent();
+            data_changed.data_hex = "0x1234".to_string();
+            let data_signed =
+                sign_validated_with_key(&secret_key, &data_changed.validate().expect("valid"))
+                    .expect("signs");
+            assert_ne!(base_signed, data_signed);
+        }
+
+        /// Proves the seed-based composed entry point (`mod ffi`'s actual
+        /// production call) agrees exactly with the lower-level, key-based
+        /// `sign_validated_with_key` this test file otherwise exercises
+        /// directly — i.e. `derive_v1` composition introduces no
+        /// discrepancy. Reuses this crate's existing BIP-39 test-vector-1
+        /// seed convention — not a real recovered secret.
+        #[test]
+        fn seed_based_entry_point_matches_direct_key_based_signing() {
+            let seed = [
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+                0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b,
+                0x1c, 0x1d, 0x1e, 0x1f,
+            ];
+            let validated = reference_intent()
+                .validate()
+                .expect("valid reference intent");
+
+            let via_seed = sign_validated_ethereum_v1_transaction(&seed, &validated)
+                .expect("seed-based signing should succeed");
+
+            let xpriv = super::super::derivation::derive_v1(
+                &seed,
+                super::super::derivation::V1DerivationPath::EthereumV1,
+            );
+            let via_key = sign_validated_with_key(&xpriv.private_key, &validated)
+                .expect("key-based signing should succeed");
+
+            assert_eq!(via_seed, via_key);
+        }
+
+        #[test]
+        fn malformed_destination_address_is_rejected() {
+            let cases = [
+                "000000000000000000000000000000000000dead",   // missing 0x
+                "0xdead",                                     // too short
+                "0x000000000000000000000000000000000000dexy", // invalid hex chars
+                "0x000000000000000000000000000000000000DEAD0", // too long
+                "0x000000000000000000000000000000000000dEAD", // mixed case, wrong checksum
+            ];
+            for to_hex in cases {
+                let mut intent = reference_intent();
+                intent.to_hex = to_hex.to_string();
+                assert_eq!(
+                    intent.validate(),
+                    Err(EthereumSigningError::InvalidDestinationAddress),
+                    "expected rejection for {to_hex:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn all_lowercase_or_all_uppercase_address_is_accepted_without_checksum() {
+            let mut lower = reference_intent();
+            lower.to_hex = "0x000000000000000000000000000000000000dead".to_string();
+            assert!(lower.validate().is_ok());
+
+            let mut upper = reference_intent();
+            upper.to_hex = "0x000000000000000000000000000000000000DEAD".to_string();
+            assert!(upper.validate().is_ok());
+        }
+
+        #[test]
+        fn zero_chain_id_is_rejected() {
+            let mut intent = reference_intent();
+            intent.chain_id = 0;
+            assert_eq!(intent.validate(), Err(EthereumSigningError::InvalidChainId));
+        }
+
+        #[test]
+        fn zero_gas_limit_is_rejected() {
+            let mut intent = reference_intent();
+            intent.gas_limit = 0;
+            assert_eq!(
+                intent.validate(),
+                Err(EthereumSigningError::InvalidNumericField)
+            );
+        }
+
+        #[test]
+        fn invalid_numeric_fields_are_rejected() {
+            for field_setter in [
+                (|i: &mut EthereumV1TransactionIntent| i.value_wei_decimal = "".to_string())
+                    as fn(&mut EthereumV1TransactionIntent),
+                |i: &mut EthereumV1TransactionIntent| i.value_wei_decimal = "12.5".to_string(),
+                |i: &mut EthereumV1TransactionIntent| i.value_wei_decimal = "-1".to_string(),
+                |i: &mut EthereumV1TransactionIntent| i.value_wei_decimal = "0x10".to_string(),
+                |i: &mut EthereumV1TransactionIntent| {
+                    i.max_fee_per_gas_wei_decimal = "abc".to_string()
+                },
+            ] {
+                let mut intent = reference_intent();
+                field_setter(&mut intent);
+                assert_eq!(
+                    intent.validate(),
+                    Err(EthereumSigningError::InvalidNumericField)
+                );
+            }
+        }
+
+        #[test]
+        fn priority_fee_exceeding_max_fee_is_rejected() {
+            let mut intent = reference_intent();
+            intent.max_priority_fee_per_gas_wei_decimal = "40000000000".to_string(); // 40 gwei
+            intent.max_fee_per_gas_wei_decimal = "30000000000".to_string(); // 30 gwei
+            assert_eq!(
+                intent.validate(),
+                Err(EthereumSigningError::InvalidNumericField)
+            );
+        }
+
+        #[test]
+        fn priority_fee_equal_to_max_fee_is_accepted() {
+            let mut intent = reference_intent();
+            intent.max_priority_fee_per_gas_wei_decimal = "30000000000".to_string();
+            intent.max_fee_per_gas_wei_decimal = "30000000000".to_string();
+            assert!(intent.validate().is_ok());
+        }
+
+        #[test]
+        fn malformed_calldata_is_rejected() {
+            let cases = ["1234", "0x123", "0xzz"];
+            for data_hex in cases {
+                let mut intent = reference_intent();
+                intent.data_hex = data_hex.to_string();
+                assert_eq!(
+                    intent.validate(),
+                    Err(EthereumSigningError::InvalidCalldata),
+                    "expected rejection for {data_hex:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn empty_calldata_and_zero_value_are_both_valid() {
+            let mut intent = reference_intent();
+            intent.data_hex = "0x".to_string();
+            intent.value_wei_decimal = "0".to_string();
+            assert!(intent.validate().is_ok());
+        }
+    }
+
+    mod ffi_ethereum_signing {
+        use super::super::ffi::{
+            FfiEthereumSigningError, FfiEthereumV1TransactionIntent,
+            dangerous_native_only_sign_ethereum_transaction_v1,
+        };
+        use super::super::signing::EthereumSigningError;
+
+        /// Same BIP-39 test vector 1 entropy used throughout this crate's
+        /// other tests — not a real recovered secret.
+        const ZERO_ENTROPY: [u8; 16] = [0u8; 16];
+
+        fn reference_ffi_intent() -> FfiEthereumV1TransactionIntent {
+            FfiEthereumV1TransactionIntent {
+                chain_id: 1,
+                nonce: 0,
+                to_hex: "0x000000000000000000000000000000000000dead".to_string(),
+                value_wei_decimal: "1000000000000000000".to_string(),
+                gas_limit: 21000,
+                max_fee_per_gas_wei_decimal: "30000000000".to_string(),
+                max_priority_fee_per_gas_wei_decimal: "1000000000".to_string(),
+                data_hex: "0x".to_string(),
+            }
+        }
+
+        #[test]
+        fn valid_entropy_and_intent_produce_a_signed_transaction() {
+            let result = dangerous_native_only_sign_ethereum_transaction_v1(
+                ZERO_ENTROPY.to_vec(),
+                reference_ffi_intent(),
+            )
+            .expect("valid entropy and intent should sign successfully");
+            assert!(result.signed_tx_hex.starts_with("0x02"));
+            assert!(result.tx_hash_hex.starts_with("0x"));
+            assert_eq!(result.tx_hash_hex.len(), 66); // "0x" + 64 hex chars
+        }
+
+        #[test]
+        fn signing_is_deterministic_for_the_same_entropy_and_intent() {
+            let first = dangerous_native_only_sign_ethereum_transaction_v1(
+                ZERO_ENTROPY.to_vec(),
+                reference_ffi_intent(),
+            )
+            .expect("signs");
+            let second = dangerous_native_only_sign_ethereum_transaction_v1(
+                ZERO_ENTROPY.to_vec(),
+                reference_ffi_intent(),
+            )
+            .expect("signs");
+            assert_eq!(first.signed_tx_hex, second.signed_tx_hex);
+            assert_eq!(first.tx_hash_hex, second.tx_hash_hex);
+        }
+
+        #[test]
+        fn malformed_intent_is_rejected_before_any_entropy_use() {
+            let mut intent = reference_ffi_intent();
+            intent.chain_id = 0;
+            assert_eq!(
+                dangerous_native_only_sign_ethereum_transaction_v1(ZERO_ENTROPY.to_vec(), intent),
+                Err(FfiEthereumSigningError::InvalidChainId)
+            );
+        }
+
+        #[test]
+        fn invalid_entropy_length_fails_generically_not_structurally() {
+            // Deliberately generic (SigningFailed), NOT
+            // FfiWalletError::InvalidEntropyLength — per this stage's own
+            // requirement that any Rust/storage-layer failure surface only
+            // a generic signing error, never storage/crypto-layer detail.
+            let result = dangerous_native_only_sign_ethereum_transaction_v1(
+                vec![0u8; 3],
+                reference_ffi_intent(),
+            );
+            assert_eq!(result, Err(FfiEthereumSigningError::SigningFailed));
+        }
+
+        #[test]
+        fn error_enum_maps_structurally_to_ffi_error() {
+            assert_eq!(
+                FfiEthereumSigningError::from(EthereumSigningError::InvalidDestinationAddress),
+                FfiEthereumSigningError::InvalidDestinationAddress
+            );
+            assert_eq!(
+                FfiEthereumSigningError::from(EthereumSigningError::InvalidChainId),
+                FfiEthereumSigningError::InvalidChainId
+            );
+            assert_eq!(
+                FfiEthereumSigningError::from(EthereumSigningError::InvalidNumericField),
+                FfiEthereumSigningError::InvalidNumericField
+            );
+            assert_eq!(
+                FfiEthereumSigningError::from(EthereumSigningError::InvalidCalldata),
+                FfiEthereumSigningError::InvalidCalldata
+            );
+            assert_eq!(
+                FfiEthereumSigningError::from(EthereumSigningError::SigningFailed),
+                FfiEthereumSigningError::SigningFailed
+            );
+        }
+
+        #[test]
+        fn ffi_intent_has_no_secret_or_hash_fields() {
+            // Destructuring names every field exactly; this fails to
+            // compile if a private key, seed, entropy, mnemonic, xpriv, or
+            // precomputed-hash field is ever silently added to the
+            // RN-facing intent shape.
+            let FfiEthereumV1TransactionIntent {
+                chain_id: _,
+                nonce: _,
+                to_hex: _,
+                value_wei_decimal: _,
+                gas_limit: _,
+                max_fee_per_gas_wei_decimal: _,
+                max_priority_fee_per_gas_wei_decimal: _,
+                data_hex: _,
+            } = reference_ffi_intent();
         }
     }
 }
