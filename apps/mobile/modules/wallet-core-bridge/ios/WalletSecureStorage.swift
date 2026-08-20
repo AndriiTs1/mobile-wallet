@@ -2,22 +2,29 @@ import CryptoKit
 import Foundation
 import Security
 
-// Stage 5D.6B — native-only iOS secure-storage prototype.
+// Stage 5D.6B — native-only iOS secure-storage layer.
 //
-// Proves the Stage 5D.6A architecture round-trips correctly using synthetic,
-// non-secret bytes: Secure Enclave P-256 key -> ephemeral ECDH ->
-// HKDF-derived AES-GCM key -> encrypted envelope, persisted in the Keychain
-// under `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly`.
+// Originally proved out the Stage 5D.6A architecture against synthetic,
+// non-secret bytes only; as of Stage 5D.8C/5D.8D (wallet creation/persist)
+// this is the PRODUCTION store for the wallet's canonical BIP-39 entropy —
+// `store()`/`read()` are called with the real, secret entropy bytes by
+// `WalletNativeCreateOrchestrator` (write) and by every native-only reader
+// of that entropy since (`WalletNativeMnemonicReconstructor`,
+// `WalletNativeEthereumAddressProvider`,
+// `WalletNativeEthereumTransactionSigner`). The cryptographic mechanism
+// itself is unchanged from its original design and design rationale: Secure
+// Enclave P-256 key -> ephemeral ECDH -> HKDF-derived AES-GCM key ->
+// encrypted envelope, persisted in the Keychain under
+// `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly`.
 //
 // NOT exposed to Expo/React Native: this type is deliberately `internal`
 // (Swift's default access level — no `public` anywhere in this file), so it
 // is invisible outside this Pod's own module and unreachable from
-// `WalletCoreBridgeModule`'s `Function(...)` surface unless a future stage
-// explicitly, deliberately wires it in.
-//
-// This is NOT wallet integration. No mnemonic, seed, BIP-39 entropy, or
-// private key is used, referenced, or persisted by this file — only
-// caller-supplied synthetic test bytes.
+// `WalletCoreBridgeModule`'s `Function(...)` surface. Only native code that
+// already legitimately holds (or is about to create) the wallet's entropy
+// may call into this file — this type has no notion of Expo/RN at all, and
+// nothing here ever forwards a byte of what it stores or reads anywhere but
+// back to its own native caller.
 
 /// Structural, non-secret error categories. Never carries a secret value —
 /// only OS status codes and case names.

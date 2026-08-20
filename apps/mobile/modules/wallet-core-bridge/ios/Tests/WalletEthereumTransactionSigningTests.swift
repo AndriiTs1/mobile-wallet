@@ -18,7 +18,12 @@ final class WalletEthereumTransactionSigningTests: XCTestCase {
 
     func testSignerCallsWalletBiometricAuthorizerAuthorize() throws {
         let source = try codeOnlySource(of: "WalletNativeEthereumTransactionSigner.swift")
-        XCTAssertTrue(source.contains("try await WalletBiometricAuthorizer.authorize(reason:"))
+        // The real `WalletBiometricAuthorizer.authorize` call is what the
+        // `authorize` parameter's PRODUCTION default actually invokes
+        // (never overridden outside tests — see that parameter's own doc
+        // comment).
+        XCTAssertTrue(source.contains("try await WalletBiometricAuthorizer.authorize(reason: reason)"))
+        XCTAssertTrue(source.contains("readEntropy: () throws -> Data = { try WalletSecureStorage.read() }"))
     }
 
     // MARK: - 2/3/4: authorization -> SecureStorage.read() -> Rust signing,
@@ -27,13 +32,20 @@ final class WalletEthereumTransactionSigningTests: XCTestCase {
 
     func testAuthorizationPrecedesSecureStorageReadPrecedesRustSigningCall() throws {
         let source = try codeOnlySource(of: "WalletNativeEthereumTransactionSigner.swift")
+        // Bounded to the function BODY only (see
+        // `testAuthorizationFailureUnconditionallyAbortsBeforeStorageOrSigning`'s
+        // identical rationale) — proves the real call order inside the
+        // function, not the incidental lexical order of the `authorize`/
+        // `readEntropy` parameter declarations above it.
+        let bodyStart = try XCTUnwrap(source.range(of: ") async throws -> WalletSignedEthereumV1Transaction {"))
+        let body = source[bodyStart.upperBound...]
 
-        let authorizeRange = try XCTUnwrap(source.range(of: "WalletBiometricAuthorizer.authorize(reason:"))
-        let storageReadRange = try XCTUnwrap(source.range(of: "WalletSecureStorage.read()"))
-        let signingCallRange = try XCTUnwrap(source.range(of: "dangerousNativeOnlySignEthereumTransactionV1(entropy:"))
+        let authorizeRange = try XCTUnwrap(body.range(of: "try await authorize("))
+        let storageReadRange = try XCTUnwrap(body.range(of: "readEntropy()"))
+        let signingCallRange = try XCTUnwrap(body.range(of: "dangerousNativeOnlySignEthereumTransactionV1(entropy:"))
 
-        XCTAssertTrue(authorizeRange.upperBound < storageReadRange.lowerBound, "authorization must be requested before SecureStorage is ever read")
-        XCTAssertTrue(storageReadRange.upperBound < signingCallRange.lowerBound, "SecureStorage must be read before the Rust signing call")
+        XCTAssertTrue(authorizeRange.upperBound < storageReadRange.lowerBound, "authorization must be requested before entropy is ever read")
+        XCTAssertTrue(storageReadRange.upperBound < signingCallRange.lowerBound, "entropy must be read before the Rust signing call")
     }
 
     /// The authorization `catch` block must unconditionally throw (no
@@ -44,14 +56,85 @@ final class WalletEthereumTransactionSigningTests: XCTestCase {
     func testAuthorizationFailureUnconditionallyAbortsBeforeStorageOrSigning() throws {
         let source = try codeOnlySource(of: "WalletNativeEthereumTransactionSigner.swift")
 
-        let firstDoRange = try XCTUnwrap(source.range(of: "do {\n            try await WalletBiometricAuthorizer.authorize(reason:"))
-        let firstCatchStart = try XCTUnwrap(source.range(of: "} catch {\n            throw WalletEthereumSigningError.authenticationFailed\n        }", range: firstDoRange.upperBound..<source.endIndex))
+        // Bounded to the function BODY (after the parameter list closes),
+        // so this asserts the real control flow — not the unrelated fact
+        // that the `authorize`/`readEntropy` parameter defaults happen to
+        // be declared in that lexical order above the body.
+        let bodyStart = try XCTUnwrap(source.range(of: ") async throws -> WalletSignedEthereumV1Transaction {"))
+        let body = source[bodyStart.upperBound...]
 
-        let storageReadRange = try XCTUnwrap(source.range(of: "WalletSecureStorage.read()"))
-        let signingCallRange = try XCTUnwrap(source.range(of: "dangerousNativeOnlySignEthereumTransactionV1(entropy:"))
+        let firstDoRange = try XCTUnwrap(body.range(of: "do {\n            try await authorize("))
+        let firstCatchStart = try XCTUnwrap(body.range(of: "} catch {\n            throw WalletEthereumSigningError.authenticationFailed\n        }", range: firstDoRange.upperBound..<body.endIndex))
+
+        let storageReadRange = try XCTUnwrap(body.range(of: "readEntropy()"))
+        let signingCallRange = try XCTUnwrap(body.range(of: "dangerousNativeOnlySignEthereumTransactionV1(entropy:"))
 
         XCTAssertTrue(firstCatchStart.upperBound < storageReadRange.lowerBound)
         XCTAssertTrue(firstCatchStart.upperBound < signingCallRange.lowerBound)
+    }
+
+    // MARK: - Behavioral (Stage 5G.3 audit): the real function, exercised
+    // with fakes at its two natural boundary points — not just a source
+    // audit of its shape. See `WalletNativeEthereumTransactionSigner.sign`'s
+    // own doc comment for why `authorize`/`readEntropy` exist.
+
+    private static let sampleIntent = WalletEthereumV1TransactionIntent(
+        chainId: 1,
+        nonce: 0,
+        toHex: "0x000000000000000000000000000000000000dEaD",
+        valueWeiDecimal: "0",
+        gasLimit: 21000,
+        maxFeePerGasWeiDecimal: "30000000000",
+        maxPriorityFeePerGasWeiDecimal: "1000000000",
+        dataHex: "0x"
+    )
+
+    func testAuthorizationFailureBehaviorallyNeverReadsEntropy() async {
+        var entropyReadCount = 0
+        do {
+            _ = try await WalletNativeEthereumTransactionSigner.sign(
+                intent: Self.sampleIntent,
+                authorize: { _ in throw WalletBiometricAuthorizationError.cancelled },
+                readEntropy: {
+                    entropyReadCount += 1
+                    return Data()
+                }
+            )
+            XCTFail("expected signing to throw when authorization fails")
+        } catch let error as WalletEthereumSigningError {
+            XCTAssertEqual(error, .authenticationFailed)
+        } catch {
+            XCTFail("expected WalletEthereumSigningError, got \(error)")
+        }
+        XCTAssertEqual(entropyReadCount, 0, "entropy must never be read when authorization fails — proven by real execution, not just source shape")
+    }
+
+    func testSuccessfulAuthorizationBehaviorallyReadsEntropyExactlyOnce() async {
+        var authorizeCallCount = 0
+        var entropyReadCount = 0
+        do {
+            // Malformed (empty) entropy deliberately makes the subsequent
+            // Rust FFI call fail — this test only needs to observe that
+            // authorization succeeding leads to exactly one entropy read
+            // and an attempted signing call, never that the FFI call
+            // itself succeeds (that is `wallet-core`'s own, separately
+            // tested, responsibility).
+            _ = try await WalletNativeEthereumTransactionSigner.sign(
+                intent: Self.sampleIntent,
+                authorize: { _ in authorizeCallCount += 1 },
+                readEntropy: {
+                    entropyReadCount += 1
+                    return Data()
+                }
+            )
+            XCTFail("expected signing to fail with malformed (empty) entropy")
+        } catch let error as WalletEthereumSigningError {
+            XCTAssertEqual(error, .signingFailed)
+        } catch {
+            XCTFail("expected WalletEthereumSigningError, got \(error)")
+        }
+        XCTAssertEqual(authorizeCallCount, 1, "authorize must be called exactly once")
+        XCTAssertEqual(entropyReadCount, 1, "entropy must be read exactly once, only after authorization succeeded")
     }
 
     // MARK: - 5: no reusable auth token/state anywhere in the orchestrator

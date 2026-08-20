@@ -88,15 +88,37 @@ struct WalletSignedEthereumV1Transaction {
 enum WalletNativeEthereumTransactionSigner {
     /// Production entry point. See this file's header comment for the
     /// exact, fixed step ordering this function enforces on every call.
-    static func sign(intent: WalletEthereumV1TransactionIntent) async throws -> WalletSignedEthereumV1Transaction {
+    ///
+    /// `authorize`/`readEntropy` default to the real
+    /// `WalletBiometricAuthorizer`/`WalletSecureStorage` calls — production
+    /// callers (`WalletCoreBridgeModule.signEthereumTransactionV1`) never
+    /// pass either argument, so production behavior is byte-for-byte
+    /// unchanged from before this parameter existed. This exists solely so
+    /// `WalletEthereumTransactionSigningTests` (Stage 5G.3 audit) can
+    /// behaviorally prove the fixed step ordering — auth failure never
+    /// reaches storage, and storage is read exactly once after a genuinely
+    /// successful authorization — by executing this real function with
+    /// fakes at exactly its two natural boundary points, rather than only
+    /// auditing the source text's shape. Mirrors the identical
+    /// injectable-`context` pattern `WalletBiometricAuthorizer.authorize`
+    /// itself already uses, and the `deps`-parameter pattern
+    /// `confirmAndSendEthereumV1`/`checkEthereumSendStatus` use on the TS
+    /// side — not a new architectural concept.
+    static func sign(
+        intent: WalletEthereumV1TransactionIntent,
+        authorize: (String) async throws -> Void = { reason in
+            try await WalletBiometricAuthorizer.authorize(reason: reason)
+        },
+        readEntropy: () throws -> Data = { try WalletSecureStorage.read() }
+    ) async throws -> WalletSignedEthereumV1Transaction {
         do {
-            try await WalletBiometricAuthorizer.authorize(reason: "Authenticate to sign this transaction")
+            try await authorize("Authenticate to sign this transaction")
         } catch {
             throw WalletEthereumSigningError.authenticationFailed
         }
 
         do {
-            let entropy = try WalletSecureStorage.read()
+            let entropy = try readEntropy()
             let ffiIntent = FfiEthereumV1TransactionIntent(
                 chainId: intent.chainId,
                 nonce: intent.nonce,
