@@ -89,12 +89,12 @@ final class WalletBackupPhraseGatedRevealTests: XCTestCase {
     // MARK: - 9/10: Settings wiring
 
     func testSecuritySettingsCallsRequestRevealBackup() throws {
-        let source = try mobileAppSource(at: "src/app/settings/security.tsx")
+        let source = try mobileAppSource(at: "src/app/(tabs)/settings/security.tsx")
         XCTAssertTrue(source.contains("await requestRevealBackup();"))
     }
 
     func testSecuritySettingsNoLongerCallsPresentBackupPhrase() throws {
-        let source = try mobileAppSource(at: "src/app/settings/security.tsx")
+        let source = try mobileAppSource(at: "src/app/(tabs)/settings/security.tsx")
         XCTAssertFalse(source.contains("presentBackupPhrase"))
     }
 
@@ -156,7 +156,7 @@ final class WalletBackupPhraseGatedRevealTests: XCTestCase {
                 XCTAssertFalse(source.contains(term), "\(filename) must not contain \(term)")
             }
         }
-        for relativePath in ["src/app/settings/security.tsx", "src/services/wallet-core-bridge.ts"] {
+        for relativePath in ["src/app/(tabs)/settings/security.tsx", "src/services/wallet-core-bridge.ts"] {
             let source = try mobileAppSource(at: relativePath)
             for term in ["console.log", "console.error", "console.warn", "clipboard", "Share.", "ShareSheet"] {
                 XCTAssertFalse(source.contains(term), "\(relativePath) must not contain \(term)")
@@ -167,7 +167,7 @@ final class WalletBackupPhraseGatedRevealTests: XCTestCase {
     // MARK: - 15: no secret-bearing terms/API added to RN
 
     func testNoSecretTermsAddedToRN() throws {
-        for relativePath in ["src/app/settings/security.tsx", "src/services/wallet-core-bridge.ts"] {
+        for relativePath in ["src/app/(tabs)/settings/security.tsx", "src/services/wallet-core-bridge.ts"] {
             let source = try mobileAppSource(at: relativePath)
             for term in ["mnemonic", "entropy", "seed", "privateKey", "xpriv", "LAContext", "biometryType"] {
                 XCTAssertNil(
@@ -207,7 +207,7 @@ final class WalletBackupPhraseGatedRevealTests: XCTestCase {
     }
 
     /// Reads a file at `apps/mobile/<relativePath>` directly (e.g.
-    /// `"src/app/settings/security.tsx"` or
+    /// `"src/app/(tabs)/settings/security.tsx"` or
     /// `"src/services/wallet-core-bridge.ts"`) — there is no RN/JS test
     /// runner in this repo, so RN-side proofs are structural source
     /// audits, the same technique

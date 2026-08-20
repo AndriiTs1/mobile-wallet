@@ -1,11 +1,10 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AppState, StyleSheet, View, useColorScheme } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AppLockScreen } from '@/components/app-lock-screen';
-import AppTabs from '@/components/app-tabs';
 import { CreateWalletScreen } from '@/components/create-wallet-screen';
 import { PrivacyCover } from '@/components/privacy-cover';
 import { Colors } from '@/constants/theme';
@@ -66,6 +65,29 @@ type StartupState =
   | { status: 'backupRequired' }
   | { status: 'walletReady' }
   | { status: 'error'; message: string };
+
+/**
+ * Stage 5G.2.3 bugfix — the ONE navigator that hosts both the tab group and
+ * non-tab push screens (`send`, `send-review`). `NativeTabs` (inside the
+ * `(tabs)` group) cannot host these itself — a `NativeTabs.Trigger` route is
+ * the only kind of screen its router recognizes (see
+ * `NativeBottomTabsRouter`'s `getStateForAction`: a `NAVIGATE` to any route
+ * name absent from its own trigger-declared `state.routes` returns
+ * unhandled, and with no ancestor navigator to bubble to, previously did
+ * nothing at all — this was the root cause of the physical-device "Send does
+ * nothing" bug). This `<Stack>` is that ancestor: `(tabs)` is its default
+ * screen, `send`/`send-review` are ordinary sibling screens `router.push`
+ * can now actually reach.
+ */
+function WalletReadyNavigator() {
+  return (
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="send" />
+      <Stack.Screen name="send-review" />
+    </Stack>
+  );
+}
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
@@ -460,7 +482,7 @@ function ProductionStartupGate() {
   }, [refreshStartupState]);
 
   if (state.status === 'walletReady') {
-    return <AppTabs />;
+    return <WalletReadyNavigator />;
   }
   if (state.status === 'checking' || state.status === 'backupRequired') {
     // Same brief, splash-covered placeholder for both: `backupRequired`
@@ -561,7 +583,7 @@ function ShowcaseCreateWalletGate() {
   }, []);
 
   if (state.completed) {
-    return <AppTabs />;
+    return <WalletReadyNavigator />;
   }
 
   return (

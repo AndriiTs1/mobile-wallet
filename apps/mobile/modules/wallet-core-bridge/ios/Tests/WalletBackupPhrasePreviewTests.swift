@@ -157,12 +157,17 @@ final class WalletBackupPhrasePreviewTests: XCTestCase {
         )
     }
 
-    func testCompletedTrueRendersAppTabs() throws {
+    func testCompletedTrueRendersWalletReadyNavigator() throws {
+        // Stage 5G.2.3 bugfix: Home is no longer a bare `<AppTabs />` (which
+        // had no ancestor Stack, so `send`/`send-review` were unreachable) —
+        // `WalletReadyNavigator` wraps it in a `<Stack>` that also hosts
+        // those two screens. See `WalletHomeSendNavigationSourceAuditTests`
+        // for the dedicated regression coverage of that fix.
         let source = try rnLayoutSource()
         let gateRange = try XCTUnwrap(source.range(of: "function ShowcaseCreateWalletGate()"))
         let gateBody = source[gateRange.upperBound...]
         XCTAssertTrue(gateBody.contains("if (state.completed) {"))
-        XCTAssertTrue(gateBody.contains("return <AppTabs />;"))
+        XCTAssertTrue(gateBody.contains("return <WalletReadyNavigator />;"))
     }
 
     func testShowcaseExistingWalletBranchNeverCreatesAnotherWallet() throws {

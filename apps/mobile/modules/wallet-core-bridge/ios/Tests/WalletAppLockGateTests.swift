@@ -459,7 +459,7 @@ final class WalletAppLockGateTests: XCTestCase {
         XCTAssertFalse(lockScreenSource.contains("requestRevealBackup"))
 
         // Regression guard: Settings' reveal call site is unchanged.
-        let securitySource = try mobileAppSource(at: "src/app/settings/security.tsx")
+        let securitySource = try mobileAppSource(at: "src/app/(tabs)/settings/security.tsx")
         XCTAssertTrue(securitySource.contains("requestRevealBackup()"))
     }
 
