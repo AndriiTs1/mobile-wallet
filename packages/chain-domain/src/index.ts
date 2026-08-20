@@ -11,6 +11,9 @@ export { SUPPORTED_ASSETS } from './asset-id';
 export type { EthereumAddress } from './ethereum-address';
 export { toEthereumAddress } from './ethereum-address';
 
+export type { EthereumTxHash } from './ethereum-tx-hash';
+export { toEthereumTxHash } from './ethereum-tx-hash';
+
 export type { AtomicAmount, DecimalString } from './amount';
 export { toAtomicAmount, toDecimalString } from './amount';
 
