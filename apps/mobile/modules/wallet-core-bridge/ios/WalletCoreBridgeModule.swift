@@ -66,6 +66,23 @@ public class WalletCoreBridgeModule: Module {
       try WalletSecureStorage.exists()
     }
 
+    // Stage 5G.2.0: secret-free. Returns ONLY the persisted wallet's
+    // public V1 Ethereum address (a plain string) — never entropy,
+    // mnemonic, seed, private key, xpriv, or any other secret material;
+    // WalletNativeEthereumAddressProvider.address()'s own doc comment
+    // explains why none of those can cross this call. Takes no argument.
+    // Ethereum addresses are public data (ADR-003 §8), so — deliberately,
+    // consistent with ADR-005 §7's "Receive (view address/QR)" row —
+    // this is NOT gated by WalletBiometricAuthorizer; it requires no
+    // fresh Face ID/Touch ID/passcode, the same posture as hasWallet()
+    // and hasBackupConfirmed() above. Narrowly scoped to exactly this one
+    // V1 Ethereum address: no generic deriveAddress(path), no arbitrary
+    // derivation-path parameter, no other chain, no key-material
+    // primitive of any kind is exposed here or anywhere else in this file.
+    Function("getEthereumAddressV1") {
+      try WalletNativeEthereumAddressProvider.address()
+    }
+
     // Stage 5E.9B: secret-free. Returns only whether the backup
     // verification flow has ever completed — a read of non-secret
     // UserDefaults-backed metadata, structurally separate from

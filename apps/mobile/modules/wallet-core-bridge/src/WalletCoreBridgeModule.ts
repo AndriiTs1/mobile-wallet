@@ -20,6 +20,16 @@ declare class WalletCoreBridgeModule extends NativeModule<{}> {
   // detail. Throws (rejects the calling context) on a genuine storage
   // failure rather than silently reporting `false`.
   hasWallet(): boolean;
+  // Stage 5G.2.0: secret-free. Returns ONLY the persisted wallet's public
+  // V1 Ethereum address (a plain string) — never entropy, mnemonic, seed,
+  // private key, xpriv, or any other secret material. Takes no argument.
+  // Ethereum addresses are public data; this is deliberately NOT gated by
+  // any device-owner authentication (no fresh Face ID/Touch ID/passcode
+  // required), the same posture as hasWallet()/hasBackupConfirmed() above.
+  // Narrowly scoped to exactly this one V1 Ethereum address — no generic
+  // deriveAddress(path), no arbitrary derivation-path parameter, no other
+  // chain, no key-material primitive of any kind.
+  getEthereumAddressV1(): string;
   // Stage 5E.9B: secret-free. Returns only whether the backup
   // verification flow has ever completed — non-secret metadata, never any
   // wallet secret, byte content, or storage detail. Read-only: no

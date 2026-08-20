@@ -1259,6 +1259,46 @@ public func dangerousNativeOnlySignEthereumTransactionV1(entropy: Data, intent: 
     )
 })
 }
+/**
+ * PUBLIC-SAFE, Stage 5G.2.0. Returns ONLY the public V1 Ethereum
+ * address — never entropy, mnemonic, seed, private key, xpriv, or any
+ * other secret material. Despite taking entropy as a parameter (the
+ * same shape as the dangerous mnemonic-reconstruction function above),
+ * this is deliberately NOT named `dangerous_native_only_*`: that
+ * prefix (and the dedicated guard script that enforces it) exists to
+ * flag functions whose RETURN value is secret and must never reach
+ * Expo/React Native — this function's return value carries no such
+ * requirement, since Ethereum addresses are public data by design
+ * (ADR-003 §8). It must still only ever be called from native code
+ * that already holds the entropy itself (the native orchestrator
+ * reading `WalletSecureStorage`) — React Native has no entropy to
+ * supply in the first place under any correct call path, so this
+ * function's input shape does not create a secret-derivation oracle
+ * reachable from RN.
+ *
+ * Composes `wallet_secret::mnemonic_from_canonical_entropy_v1` (Stage
+ * 5D.2) and `derivation::derive_ethereum_v1_address` (Stage 5B.3)
+ * unchanged — no second BIP-39/derivation implementation, no new
+ * derivation path, and no arbitrary-path parameter: the fixed V1
+ * Ethereum path (`m/44'/60'/0'/0/0`, ADR-003 §2) is the only path this
+ * function can ever derive. V1 requires exactly 16 bytes of entropy;
+ * any other length fails structurally with
+ * `FfiWalletError::InvalidEntropyLength`. The caller-owned `entropy`
+ * buffer is best-effort zeroed before this function returns (same
+ * caveat as `dangerous_native_only_mnemonic_from_entropy_v1` above:
+ * not a guarantee against every compiler-/allocator-level copy). The
+ * derived seed is a local binding, used only for the one derivation
+ * call, and is dropped (zeroized via its own `Zeroizing` type,
+ * unchanged from `seed_from_mnemonic`) at the end of this function.
+ */
+public func deriveEthereumV1AddressV1(entropy: Data)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiWalletError_lift) {
+        uniffiCallStatus in
+    uniffi_wallet_core_fn_func_derive_ethereum_v1_address_v1(
+        FfiConverterData.lower(entropy),uniffiCallStatus
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -1288,6 +1328,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallet_core_checksum_func_dangerous_native_only_sign_ethereum_transaction_v1() != 58861) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallet_core_checksum_func_derive_ethereum_v1_address_v1() != 53403) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallet_core_checksum_method_fficreatewalletsecretsession_addresses() != 42244) {

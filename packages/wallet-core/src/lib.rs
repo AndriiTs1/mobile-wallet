@@ -733,6 +733,7 @@ mod signing {
 /// entropy and the mnemonic sentence cross here, and only through the two
 /// explicitly named dangerous accessors below.
 mod ffi {
+    use super::derivation;
     use super::signing;
     use super::wallet_secret;
 
@@ -879,6 +880,46 @@ mod ffi {
         let result = wallet_secret::mnemonic_from_canonical_entropy_v1(&entropy)
             .map(|mnemonic| mnemonic.to_string())
             .map_err(FfiWalletError::from);
+        entropy.fill(0);
+        result
+    }
+
+    /// PUBLIC-SAFE, Stage 5G.2.0. Returns ONLY the public V1 Ethereum
+    /// address — never entropy, mnemonic, seed, private key, xpriv, or any
+    /// other secret material. Despite taking entropy as a parameter (the
+    /// same shape as the dangerous mnemonic-reconstruction function above),
+    /// this is deliberately NOT named `dangerous_native_only_*`: that
+    /// prefix (and the dedicated guard script that enforces it) exists to
+    /// flag functions whose RETURN value is secret and must never reach
+    /// Expo/React Native — this function's return value carries no such
+    /// requirement, since Ethereum addresses are public data by design
+    /// (ADR-003 §8). It must still only ever be called from native code
+    /// that already holds the entropy itself (the native orchestrator
+    /// reading `WalletSecureStorage`) — React Native has no entropy to
+    /// supply in the first place under any correct call path, so this
+    /// function's input shape does not create a secret-derivation oracle
+    /// reachable from RN.
+    ///
+    /// Composes `wallet_secret::mnemonic_from_canonical_entropy_v1` (Stage
+    /// 5D.2) and `derivation::derive_ethereum_v1_address` (Stage 5B.3)
+    /// unchanged — no second BIP-39/derivation implementation, no new
+    /// derivation path, and no arbitrary-path parameter: the fixed V1
+    /// Ethereum path (`m/44'/60'/0'/0/0`, ADR-003 §2) is the only path this
+    /// function can ever derive. V1 requires exactly 16 bytes of entropy;
+    /// any other length fails structurally with
+    /// `FfiWalletError::InvalidEntropyLength`. The caller-owned `entropy`
+    /// buffer is best-effort zeroed before this function returns (same
+    /// caveat as `dangerous_native_only_mnemonic_from_entropy_v1` above:
+    /// not a guarantee against every compiler-/allocator-level copy). The
+    /// derived seed is a local binding, used only for the one derivation
+    /// call, and is dropped (zeroized via its own `Zeroizing` type,
+    /// unchanged from `seed_from_mnemonic`) at the end of this function.
+    #[uniffi::export]
+    pub fn derive_ethereum_v1_address_v1(mut entropy: Vec<u8>) -> Result<String, FfiWalletError> {
+        let result = wallet_secret::mnemonic_from_canonical_entropy_v1(&entropy)
+            .map_err(FfiWalletError::from)
+            .map(|mnemonic| wallet_secret::seed_from_mnemonic(&mnemonic, ""))
+            .map(|seed| derivation::derive_ethereum_v1_address(seed.as_slice()));
         entropy.fill(0);
         result
     }
@@ -1709,6 +1750,67 @@ mod tests {
                 dangerous_native_only_mnemonic_from_entropy_v1(Vec::new()),
                 Err(FfiWalletError::InvalidEntropyLength)
             );
+        }
+    }
+
+    mod ffi_ethereum_address {
+        use super::super::ffi::{FfiWalletError, derive_ethereum_v1_address_v1};
+
+        /// Same BIP-39 test vector 1 entropy used throughout this crate's
+        /// other tests — not a real recovered secret. Reference address
+        /// cross-checked independently in Stage 5B.3/5D.4's own tests
+        /// (`v1_ethereum_address`, `ffi_create_session`), not re-derived
+        /// from this crate's own implementation here.
+        const EXPECTED_CHECKSUM_ADDRESS: &str = "0x9858EfFD232B4033E47d90003D41EC34EcaEda94";
+
+        #[test]
+        fn derives_expected_address_from_valid_entropy() {
+            let address =
+                derive_ethereum_v1_address_v1(vec![0u8; 16]).expect("valid 16-byte entropy");
+            assert_eq!(address, EXPECTED_CHECKSUM_ADDRESS);
+        }
+
+        #[test]
+        fn is_deterministic_for_the_same_entropy() {
+            let first = derive_ethereum_v1_address_v1(vec![0u8; 16]).expect("valid entropy");
+            let second = derive_ethereum_v1_address_v1(vec![0u8; 16]).expect("valid entropy");
+            assert_eq!(first, second);
+        }
+
+        #[test]
+        fn distinct_entropy_derives_a_distinct_address() {
+            let first = derive_ethereum_v1_address_v1(vec![0u8; 16]).expect("valid entropy");
+            let second = derive_ethereum_v1_address_v1(vec![0xAB; 16]).expect("valid entropy");
+            assert_ne!(first, second);
+        }
+
+        #[test]
+        fn invalid_entropy_length_fails_structurally() {
+            assert_eq!(
+                derive_ethereum_v1_address_v1(vec![0u8; 15]),
+                Err(FfiWalletError::InvalidEntropyLength)
+            );
+            assert_eq!(
+                derive_ethereum_v1_address_v1(vec![0u8; 32]),
+                Err(FfiWalletError::InvalidEntropyLength)
+            );
+            assert_eq!(
+                derive_ethereum_v1_address_v1(Vec::new()),
+                Err(FfiWalletError::InvalidEntropyLength)
+            );
+        }
+
+        /// This function returns a bare `String` — there is no struct/enum
+        /// shape here that could grow a second, secret-bearing field the
+        /// way a `Record`/`Object` type could. This test exists mainly to
+        /// document that fact structurally: the return type itself is
+        /// `Result<String, FfiWalletError>`, nothing else, verified simply
+        /// by this call compiling and the value behaving as a plain string.
+        #[test]
+        fn return_value_is_a_bare_public_address_string() {
+            let address = derive_ethereum_v1_address_v1(vec![0u8; 16]).expect("valid entropy");
+            assert!(address.starts_with("0x"));
+            assert_eq!(address.len(), 42);
         }
     }
 

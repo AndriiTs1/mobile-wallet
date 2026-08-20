@@ -10,6 +10,8 @@
  * Expo boundary in the first place (see `WalletCoreBridgeModule.swift`/`.ts`).
  */
 
+import { toEthereumAddress, type EthereumAddress } from 'chain-domain';
+
 import type {
   EthereumV1SignedTransaction,
   EthereumV1TransactionIntent,
@@ -19,6 +21,7 @@ export type { EthereumV1SignedTransaction, EthereumV1TransactionIntent };
 
 type WalletCoreBridgeApi = {
   hasWallet(): boolean;
+  getEthereumAddressV1(): string;
   createWalletAndPresentBackup(): Promise<void>;
   presentBackupPhrase(): Promise<void>;
   hasBackupConfirmed(): boolean;
@@ -62,6 +65,28 @@ export function hasWallet(): boolean {
     throw new Error('Native Wallet Core module unavailable in this runtime.');
   }
   return bridge.hasWallet();
+}
+
+/**
+ * Stage 5G.2.0 — the persisted wallet's public V1 Ethereum address
+ * (`m/44'/60'/0'/0/0`, ADR-003 §2). Public data, not secret material: no
+ * entropy, mnemonic, seed, private key, or xpriv ever crosses this
+ * boundary in either direction, and no device-owner authentication is
+ * required to read it (same posture as `hasWallet`/`hasBackupConfirmed`).
+ * Validated with `chain-domain`'s existing `toEthereumAddress` — the same
+ * validator used everywhere else in this app; this file does not
+ * introduce a second one. Throws if the native module is unavailable, if
+ * the native call itself throws (a genuine storage/derivation failure —
+ * never treat a caught error here as "no wallet"), or if the returned
+ * value is somehow not a well-formed Ethereum address (defense in depth;
+ * not expected from this native call in practice).
+ */
+export function getEthereumAddressV1(): EthereumAddress {
+  const bridge = loadWalletCoreBridge();
+  if (!bridge) {
+    throw new Error('Native Wallet Core module unavailable in this runtime.');
+  }
+  return toEthereumAddress(bridge.getEthereumAddressV1());
 }
 
 /**
