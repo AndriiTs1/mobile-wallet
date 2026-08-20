@@ -19,9 +19,18 @@ final class WalletEthereumSendUiSourceAuditTests: XCTestCase {
     // MARK: - 1/2: raw string amount passed to prepareEthereumV1Send, no Number/parseFloat
 
     func testSendFormPassesRawRecipientAndAmountStringsToPreparation() throws {
+        // Stage 5G.2.3 bugfix (European decimal comma): recipient is still
+        // passed completely raw. Amount is passed through
+        // `normalizeEthAmountDecimalSeparator` first — a UI-boundary-only,
+        // non-financial-parsing "," -> "." swap (see
+        // `WalletEthAmountInputNormalizationSourceAuditTests` for the
+        // dedicated audit of that function itself) — never `Number`/
+        // `parseFloat`, and the raw `amount` state is never reassigned.
         let body = try handleContinueBody()
-        XCTAssertTrue(body.contains("await prepareEthereumV1Send(recipient, amount);"),
-                      "must call prepareEthereumV1Send with the raw recipient/amount strings, unmodified")
+        XCTAssertTrue(body.contains("const normalizedAmount = normalizeEthAmountDecimalSeparator(amount);"))
+        XCTAssertTrue(body.contains("await prepareEthereumV1Send(recipient, normalizedAmount);"),
+                      "must call prepareEthereumV1Send with the raw recipient string and the normalized amount")
+        XCTAssertFalse(body.contains("amount ="), "the raw `amount` state must never be reassigned/mutated")
     }
 
     func testNoFinancialParsingConversionInSendOrReviewScreens() throws {

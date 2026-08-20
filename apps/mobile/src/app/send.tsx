@@ -15,6 +15,7 @@ import {
 } from '@/services/ethereum-send-preparation';
 import { setPendingEthereumSend } from '@/services/ethereum-send-session';
 import { getEthereumAddressV1 } from '@/services/wallet-core-bridge';
+import { normalizeEthAmountDecimalSeparator } from '@/utils/amount-input';
 
 const palette = Colors.dark;
 
@@ -74,10 +75,16 @@ export default function SendScreen() {
     setFormState({ status: 'preparing' });
 
     try {
-      // Raw strings, exactly as entered — recipient/amount parsing and
-      // validation is Stage 5G.2.2's job alone; this screen performs none
-      // of its own.
-      const prepared = await prepareEthereumV1Send(recipient, amount);
+      // Recipient is passed exactly as entered — Stage 5G.2.2's parser
+      // validates it; this screen performs none of its own recipient
+      // validation. Amount is normalized ONLY at this call boundary (a
+      // single "," -> "." swap — see normalizeEthAmountDecimalSeparator's
+      // own doc comment for exactly what it does and does not touch); the
+      // `amount` state itself, and therefore what the TextInput displays,
+      // is never modified. The strict domain parser still receives, and
+      // still alone decides, everything else about validity.
+      const normalizedAmount = normalizeEthAmountDecimalSeparator(amount);
+      const prepared = await prepareEthereumV1Send(recipient, normalizedAmount);
       isPreparingRef.current = false;
       setFormState({ status: 'idle' });
       setPendingEthereumSend(prepared);

@@ -95,7 +95,7 @@ final class WalletSendReviewButtonSourceAuditTests: XCTestCase {
         let catchBlock = body[catchRange.lowerBound...]
         XCTAssertFalse(catchBlock.contains("router.push"), "navigation must never happen from the catch/failure path")
 
-        let prepareRange = try XCTUnwrap(body.range(of: "await prepareEthereumV1Send(recipient, amount);"))
+        let prepareRange = try XCTUnwrap(body.range(of: "await prepareEthereumV1Send(recipient, normalizedAmount);"))
         let navigateRange = try XCTUnwrap(body.range(of: "router.push('/send-review');"))
         XCTAssertTrue(prepareRange.upperBound < navigateRange.lowerBound,
                       "router.push must come strictly after the awaited, successfully-resolved prepareEthereumV1Send call")
