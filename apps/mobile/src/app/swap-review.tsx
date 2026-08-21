@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import {
   SUPPORTED_ASSETS,
@@ -13,6 +13,11 @@ import { CoinBadge } from '@/components/coin-badge';
 import { ScreenHeader } from '@/components/screen-header';
 import { ScreenScaffold } from '@/components/screen-scaffold';
 import { Colors, Spacing } from '@/constants/theme';
+import {
+  prepareEthMainnetSwap,
+  type EthereumPreparedSwap,
+} from '@/services/ethereum-swap-preparation';
+import { getEthereumAddressV1 } from '@/services/wallet-core-bridge';
 import { consumePendingSwapQuote } from '@/services/swap-session';
 
 const palette = Colors.dark;
@@ -20,12 +25,23 @@ const palette = Colors.dark;
 const USDC_DECIMALS =
   SUPPORTED_ASSETS.find((asset) => asset.symbol === 'USDC')?.decimals ?? 6;
 
+type PreparationState =
+  | { status: 'ready' }
+  | { status: 'preparing' }
+  | { status: 'prepared'; prepared: EthereumPreparedSwap }
+  | { status: 'error' };
+
 export default function SwapReviewScreen() {
   const router = useRouter();
 
   const [quote] = useState<SwapQuote | null>(() =>
     consumePendingSwapQuote(),
   );
+
+  const [preparationState, setPreparationState] =
+    useState<PreparationState>({ status: 'ready' });
+
+  const isPreparingRef = useRef(false);
 
   if (!quote) {
     return (
@@ -57,6 +73,33 @@ export default function SwapReviewScreen() {
     quote.minimumBuyAmount,
     USDC_DECIMALS,
   );
+
+  const handlePrepareSwap = async () => {
+    if (
+      isPreparingRef.current ||
+      preparationState.status === 'preparing' ||
+      preparationState.status === 'prepared'
+    ) {
+      return;
+    }
+
+    isPreparingRef.current = true;
+    setPreparationState({ status: 'preparing' });
+
+    try {
+      const owner = getEthereumAddressV1();
+      const prepared = await prepareEthMainnetSwap(owner, quote);
+
+      isPreparingRef.current = false;
+      setPreparationState({ status: 'prepared', prepared });
+    } catch {
+      isPreparingRef.current = false;
+      setPreparationState({ status: 'error' });
+    }
+  };
+
+  const isPreparing = preparationState.status === 'preparing';
+  const isPrepared = preparationState.status === 'prepared';
 
   return (
     <ScreenScaffold header={<ScreenHeader title="Review swap" back />}>
@@ -108,6 +151,28 @@ export default function SwapReviewScreen() {
             <Text style={styles.detailLabel}>Swap type</Text>
             <Text style={styles.detailValue}>Exact input</Text>
           </View>
+
+          {preparationState.status === 'prepared' ? (
+            <>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Maximum network fee</Text>
+                <Text style={styles.detailValue}>
+                  {formatWeiAsEthDecimalString(
+                    preparationState.prepared.maxFeeWei,
+                  )} ETH
+                </Text>
+              </View>
+
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Maximum ETH debit</Text>
+                <Text style={styles.detailValue}>
+                  {formatWeiAsEthDecimalString(
+                    preparationState.prepared.totalMaxEthDebitWei,
+                  )} ETH
+                </Text>
+              </View>
+            </>
+          ) : null}
         </View>
 
         <Text style={styles.notice}>
@@ -115,13 +180,42 @@ export default function SwapReviewScreen() {
           authentication before signing.
         </Text>
 
+        {preparationState.status === 'error' ? (
+          <Text
+            style={styles.preparationError}
+            accessible
+            accessibilityRole="alert">
+            Couldn’t prepare the swap transaction. Please try again.
+          </Text>
+        ) : null}
+
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Confirm swap"
-          accessibilityState={{ disabled: true }}
-          disabled
-          style={styles.confirmButton}>
-          <Text style={styles.confirmButtonText}>Confirm swap</Text>
+          accessibilityLabel="Prepare swap"
+          accessibilityState={{
+            disabled: isPreparing || isPrepared,
+            busy: isPreparing,
+          }}
+          disabled={isPreparing || isPrepared}
+          onPress={handlePrepareSwap}
+          style={[
+            styles.confirmButton,
+            (isPreparing || isPrepared) && styles.confirmButtonDisabled,
+          ]}>
+          {isPreparing ? (
+            <ActivityIndicator
+              size="small"
+              color={palette.background}
+            />
+          ) : null}
+
+          <Text style={styles.confirmButtonText}>
+            {isPreparing
+              ? 'Preparing…'
+              : isPrepared
+                ? 'Ready to sign'
+                : 'Prepare swap'}
+          </Text>
         </Pressable>
       </View>
     </ScreenScaffold>
@@ -220,13 +314,26 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
+  preparationError: {
+    marginTop: Spacing.three,
+    color: palette.negative,
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+
   confirmButton: {
     marginTop: Spacing.four,
     minHeight: 52,
     borderRadius: 18,
     backgroundColor: palette.accentGold,
+    flexDirection: 'row',
+    gap: 8,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  confirmButtonDisabled: {
     opacity: 0.4,
   },
 
