@@ -1,14 +1,46 @@
 import { SymbolView } from 'expo-symbols';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { parseEthDecimalStringToWei, type AtomicAmount } from 'chain-domain';
 
 import { CoinBadge } from '@/components/coin-badge';
 import { ScreenHeader } from '@/components/screen-header';
 import { ScreenScaffold } from '@/components/screen-scaffold';
 import { Colors, Spacing } from '@/constants/theme';
+import { normalizeEthAmountDecimalSeparator } from '@/utils/amount-input';
 
 const palette = Colors.dark;
 
+type SwapAmountState =
+  | { status: 'empty' }
+  | { status: 'invalid' }
+  | { status: 'ready'; sellAmount: AtomicAmount };
+
+function parseSwapEthAmount(input: string): SwapAmountState {
+  if (input.length === 0) {
+    return { status: 'empty' };
+  }
+
+  try {
+    return {
+      status: 'ready',
+      sellAmount: parseEthDecimalStringToWei(
+        normalizeEthAmountDecimalSeparator(input),
+      ),
+    };
+  } catch {
+    return { status: 'invalid' };
+  }
+}
+
 export default function SwapScreen() {
+  const [amount, setAmount] = useState('');
+
+  const amountState = useMemo(
+    () => parseSwapEthAmount(amount),
+    [amount],
+  );
+
   return (
     <ScreenScaffold header={<ScreenHeader title="Swap" back />}>
       <View style={styles.content}>
@@ -23,8 +55,26 @@ export default function SwapScreen() {
             </View>
           </View>
 
-          <Text style={styles.amount}>0</Text>
+          <TextInput
+            value={amount}
+            onChangeText={setAmount}
+            placeholder="0"
+            placeholderTextColor={palette.textSecondary}
+            keyboardType="decimal-pad"
+            autoCorrect={false}
+            style={styles.amountInput}
+            accessibilityLabel="ETH amount to swap"
+          />
         </View>
+
+        {amountState.status === 'invalid' ? (
+          <Text
+            style={styles.amountError}
+            accessible
+            accessibilityRole="alert">
+            Enter a valid ETH amount.
+          </Text>
+        ) : null}
 
         <View style={styles.switchWrap}>
           <View style={styles.switchButton}>
@@ -57,9 +107,19 @@ export default function SwapScreen() {
         </View>
 
         <View style={styles.quotePlaceholder}>
-          <Text style={styles.quoteTitle}>Enter an amount</Text>
+          <Text style={styles.quoteTitle}>
+            {amountState.status === 'ready'
+              ? 'Ready for price preview'
+              : amountState.status === 'invalid'
+                ? 'Check the amount'
+                : 'Enter an amount'}
+          </Text>
           <Text style={styles.quoteText}>
-            Your swap quote and estimated network cost will appear here.
+            {amountState.status === 'ready'
+              ? 'A live swap price will appear here once the secure quote transport is connected.'
+              : amountState.status === 'invalid'
+                ? 'Use a positive ETH amount with up to 18 decimal places.'
+                : 'Your swap quote and estimated network cost will appear here.'}
           </Text>
         </View>
 
@@ -122,6 +182,25 @@ const styles = StyleSheet.create({
     color: palette.text,
     fontSize: 30,
     fontWeight: '700',
+    textAlign: 'right',
+  },
+
+  amountInput: {
+    minWidth: 120,
+    maxWidth: '55%',
+    paddingVertical: 8,
+    paddingHorizontal: 0,
+    color: palette.text,
+    fontSize: 30,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
+
+  amountError: {
+    marginTop: 8,
+    color: palette.negative,
+    fontSize: 12,
+    fontWeight: '600',
     textAlign: 'right',
   },
 
