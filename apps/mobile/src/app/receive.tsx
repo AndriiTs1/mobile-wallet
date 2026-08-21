@@ -54,7 +54,7 @@ export default function ReceiveScreen() {
       {state.status === 'ready' ? (
         <View style={styles.content}>
           <View style={styles.assetBlock}>
-            <CoinBadge symbol="ETH" size={52} />
+            <CoinBadge symbol="ETH" size={44} />
             <Text style={styles.assetName}>Ethereum</Text>
             <Text style={styles.assetSymbol}>ETH · Ethereum Mainnet</Text>
           </View>
@@ -62,7 +62,7 @@ export default function ReceiveScreen() {
           <View style={styles.qrPanel}>
             <QRCode
               value={state.address}
-              size={216}
+              size={196}
               backgroundColor="#FFFFFF"
               color="#000000"
             />
@@ -118,7 +118,7 @@ export default function ReceiveScreen() {
               tintColor={palette.textSecondary}
               fallback={<Text style={styles.shareFallback}>↗</Text>}
             />
-            <Text style={styles.shareButtonText}>Share address</Text>
+            <Text style={styles.shareButtonText}>Share</Text>
           </Pressable>
 
           <View style={styles.noticeRow}>
@@ -145,17 +145,17 @@ export default function ReceiveScreen() {
 const styles = StyleSheet.create({
   content: {
     alignItems: 'center',
-    paddingTop: Spacing.four,
-    paddingBottom: Spacing.five,
+    paddingTop: Spacing.three,
+    paddingBottom: Spacing.four,
   },
 
   assetBlock: {
     alignItems: 'center',
   },
   assetName: {
-    marginTop: Spacing.two,
+    marginTop: Spacing.one + 2,
     color: palette.text,
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '700',
     textAlign: 'center',
   },
@@ -168,16 +168,16 @@ const styles = StyleSheet.create({
   },
 
   qrPanel: {
-    marginTop: Spacing.five,
-    padding: 14,
+    marginTop: Spacing.four,
+    padding: 12,
     backgroundColor: '#FFFFFF',
-    borderRadius: 20,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
   addressLabel: {
-    marginTop: Spacing.four,
+    marginTop: Spacing.three,
     color: palette.textSecondary,
     fontSize: 12,
     fontWeight: '500',
@@ -185,17 +185,23 @@ const styles = StyleSheet.create({
   },
   addressText: {
     marginTop: Spacing.one,
+    width: '100%',
     paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
     color: palette.text,
+    backgroundColor: palette.backgroundElement,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.border,
     fontFamily: 'ui-monospace',
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: 13,
+    lineHeight: 19,
     textAlign: 'center',
   },
 
   copyButton: {
     marginTop: Spacing.four,
-    minHeight: 54,
+    minHeight: 50,
     width: '100%',
     borderRadius: 16,
     backgroundColor: palette.accentGold,
@@ -245,7 +251,7 @@ const styles = StyleSheet.create({
   },
 
   noticeRow: {
-    marginTop: Spacing.four,
+    marginTop: Spacing.three,
     width: '100%',
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -255,7 +261,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: palette.border,
     paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.three,
+    paddingVertical: Spacing.two,
   },
   noticeGlyphFallback: {
     color: palette.textSecondary,
