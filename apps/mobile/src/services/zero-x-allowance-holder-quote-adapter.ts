@@ -36,7 +36,7 @@ import {
  * never treated as a valid `EthereumAddress` for any other purpose in this
  * codebase.
  */
-const ZERO_X_NATIVE_TOKEN_SENTINEL = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+export const ZERO_X_NATIVE_TOKEN_SENTINEL = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 
 /**
  * Fixed EIP-155 numeric chain id for Ethereum mainnet — the only chain this
@@ -45,7 +45,7 @@ const ZERO_X_NATIVE_TOKEN_SENTINEL = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
  * imported from there since that constant is private to that module and
  * this is a different trust boundary (request reconciliation, not signing).
  */
-const ETHEREUM_MAINNET_EVM_CHAIN_ID = 1;
+export const ETHEREUM_MAINNET_EVM_CHAIN_ID = 1;
 
 export type ZeroXAllowanceHolderAdapterErrorReason =
   | 'unsupported_chain'
@@ -159,7 +159,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function expectedTokenAddress(asset: EthereumSwapAsset): string {
+/**
+ * Maps a curated `EthereumSwapAsset` to the identifier 0x's API expects for
+ * a `sellToken`/`buyToken` field — the 0x native-ETH sentinel for a native
+ * asset, or the ERC-20 contract address otherwise. Exported so
+ * `zero-x-allowance-holder-price-client.ts` (Stage SWAP 1.4A) shares this
+ * exact mapping rather than duplicating the sentinel constant.
+ */
+export function zeroXTokenIdentifierFor(asset: EthereumSwapAsset): string {
   return asset.kind === 'native' ? ZERO_X_NATIVE_TOKEN_SENTINEL : asset.contractAddress.toLowerCase();
 }
 
@@ -257,7 +264,7 @@ export function parseZeroXAllowanceHolderQuote(input: ZeroXAllowanceHolderAdapte
       '0x AllowanceHolder quote response is missing a string "sellToken".',
     );
   }
-  if (body.sellToken.toLowerCase() !== expectedTokenAddress(request.sellAsset)) {
+  if (body.sellToken.toLowerCase() !== zeroXTokenIdentifierFor(request.sellAsset)) {
     throw new ZeroXAllowanceHolderAdapterError(
       'unexpected_sell_token',
       `0x AllowanceHolder quote response sellToken "${body.sellToken}" does not match the requested sell asset.`,
@@ -270,7 +277,7 @@ export function parseZeroXAllowanceHolderQuote(input: ZeroXAllowanceHolderAdapte
       '0x AllowanceHolder quote response is missing a string "buyToken".',
     );
   }
-  if (body.buyToken.toLowerCase() !== expectedTokenAddress(request.buyAsset)) {
+  if (body.buyToken.toLowerCase() !== zeroXTokenIdentifierFor(request.buyAsset)) {
     throw new ZeroXAllowanceHolderAdapterError(
       'unexpected_buy_token',
       `0x AllowanceHolder quote response buyToken "${body.buyToken}" does not match the requested buy asset.`,
