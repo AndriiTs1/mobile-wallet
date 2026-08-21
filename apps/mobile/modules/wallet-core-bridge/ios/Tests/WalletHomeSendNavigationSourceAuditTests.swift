@@ -33,6 +33,15 @@ final class WalletHomeSendNavigationSourceAuditTests: XCTestCase {
         XCTAssertTrue(body.contains("<Stack.Screen name=\"send-review\" />"))
     }
 
+    // Stage 5G.4: same registration requirement as Send — a route that
+    // exists as a file but is never Stack.Screen-registered here would
+    // reproduce the exact same "does nothing" symptom this whole suite
+    // guards against, just for Receive instead of Send.
+    func testReceiveIsRegisteredAsAStackScreen() throws {
+        let body = try walletReadyNavigatorBody()
+        XCTAssertTrue(body.contains("<Stack.Screen name=\"receive\" />"))
+    }
+
     func testWalletReadyNavigatorIsActuallyUsedOnBothSuccessPaths() throws {
         let source = try layoutSource()
         // Both the production and DEV-showcase "wallet ready" branches must
@@ -62,22 +71,52 @@ final class WalletHomeSendNavigationSourceAuditTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: appDir.appendingPathComponent("(tabs)/send-review.tsx").path))
     }
 
-    // MARK: - Home's Send quick action: real callback, correct route, others unaffected
+    // Stage 5G.4: same NativeTabs-swallowing risk applies to receive.tsx.
+    func testReceiveScreenRemainsOutsideTheTabGroup() throws {
+        let fm = FileManager.default
+        let appDir = mobileAppDirectoryURL()
+        XCTAssertTrue(fm.fileExists(atPath: appDir.appendingPathComponent("receive.tsx").path))
+        XCTAssertFalse(fm.fileExists(atPath: appDir.appendingPathComponent("(tabs)/receive.tsx").path),
+                       "receive.tsx must stay OUTSIDE the (tabs) group, same as send.tsx")
+    }
+
+    // MARK: - Home's Send/Receive quick actions: real callbacks, correct routes, others unaffected
+    //
+    // Stage 5G.4: Receive was added as a second real branch of the same
+    // onPress ternary (`action.label === 'Send' ? ... : action.label ===
+    // 'Receive' ? ... : undefined`), so the exact single-line Send-only
+    // string these tests originally asserted on no longer appears verbatim
+    // — these tests were updated in that stage to check for both routes'
+    // presence/shape rather than one exact literal ternary string, and two
+    // new Receive-equivalent tests were added alongside the existing
+    // Send ones.
 
     func testSendQuickActionHasARealNavigationCallback() throws {
         let body = try quickActionRenderLoopBody()
-        XCTAssertTrue(body.contains("onPress={action.label === 'Send' ? () => router.push('/send') : undefined}"))
+        XCTAssertTrue(body.contains("action.label === 'Send'"))
+        XCTAssertTrue(body.contains("? () => router.push('/send')"))
+    }
+
+    func testReceiveQuickActionHasARealNavigationCallback() throws {
+        let body = try quickActionRenderLoopBody()
+        XCTAssertTrue(body.contains("action.label === 'Receive'"))
+        XCTAssertTrue(body.contains("? () => router.push('/receive')"))
     }
 
     func testPressableInTheRenderLoopReceivesTheOnPressProp() throws {
         // Bounded to the actual <Pressable ...> opening tag, not merely
-        // present somewhere in the file — proves the callback is wired to
-        // the rendered element, not just defined and discarded.
+        // present somewhere in the file — proves both callbacks are wired
+        // to the rendered element, not just defined and discarded.
         let body = try quickActionRenderLoopBody()
         let pressableStart = try XCTUnwrap(body.range(of: "<Pressable"))
         let pressableTagEnd = try XCTUnwrap(body.range(of: "</Pressable>", range: pressableStart.upperBound..<body.endIndex))
         let pressableElement = body[pressableStart.lowerBound..<pressableTagEnd.upperBound]
-        XCTAssertTrue(pressableElement.contains("onPress={action.label === 'Send' ? () => router.push('/send') : undefined}"))
+        XCTAssertTrue(pressableElement.contains("onPress={"))
+        XCTAssertTrue(pressableElement.contains("action.label === 'Send'"))
+        XCTAssertTrue(pressableElement.contains("router.push('/send')"))
+        XCTAssertTrue(pressableElement.contains("action.label === 'Receive'"))
+        XCTAssertTrue(pressableElement.contains("router.push('/receive')"))
+        XCTAssertTrue(pressableElement.contains(": undefined"))
     }
 
     func testRouteStringIsExactlySlashSend() throws {
@@ -86,15 +125,24 @@ final class WalletHomeSendNavigationSourceAuditTests: XCTestCase {
         XCTAssertFalse(body.contains("router.push('send')"), "must be the absolute route \"/send\", not a relative segment")
     }
 
+    func testRouteStringIsExactlySlashReceive() throws {
+        let body = try quickActionRenderLoopBody()
+        XCTAssertTrue(body.contains("router.push('/receive')"))
+        XCTAssertFalse(body.contains("router.push('receive')"), "must be the absolute route \"/receive\", not a relative segment")
+    }
+
     func testOtherQuickActionsRemainUnaffected() throws {
         let source = try indexSource()
         XCTAssertTrue(source.contains("{ label: 'Receive', symbol: 'arrow.down', glyph: '↓' }"))
         XCTAssertTrue(source.contains("{ label: 'Swap', symbol: 'arrow.left.arrow.right', glyph: '⇄' }"))
         XCTAssertTrue(source.contains("{ label: 'Buy', symbol: 'plus', glyph: '+' }"))
-        // The ternary's false branch is the literal `undefined` — Receive/Swap/Buy
-        // get no onPress at all, exactly as before this fix.
+        // The ternary's final false branch is still the literal `undefined`
+        // — Swap/Buy get no onPress at all, exactly as before. Send and
+        // Receive are the only two labels ever compared against.
         let body = try quickActionRenderLoopBody()
-        XCTAssertTrue(body.contains(": undefined}"))
+        XCTAssertTrue(body.contains(": undefined"))
+        XCTAssertFalse(body.contains("'Swap'"), "Swap must never be compared against in the onPress ternary — it must stay unwired")
+        XCTAssertFalse(body.contains("'Buy'"), "Buy must never be compared against in the onPress ternary — it must stay unwired")
     }
 
     // MARK: - Helpers

@@ -101,7 +101,13 @@ export default function HomeScreen() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={action.label}
-              onPress={action.label === 'Send' ? () => router.push('/send') : undefined}
+              onPress={
+                action.label === 'Send'
+                  ? () => router.push('/send')
+                  : action.label === 'Receive'
+                    ? () => router.push('/receive')
+                    : undefined
+              }
               style={({ pressed }) => [styles.actionCircle, pressed && styles.actionCirclePressed]}>
               <SymbolView
                 name={{ ios: action.symbol }}

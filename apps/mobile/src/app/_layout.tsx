@@ -78,6 +78,10 @@ type StartupState =
  * nothing" bug). This `<Stack>` is that ancestor: `(tabs)` is its default
  * screen, `send`/`send-review` are ordinary sibling screens `router.push`
  * can now actually reach.
+ *
+ * Stage 5G.4: `receive` is registered the same way, as another ordinary
+ * sibling screen — Home's Receive quick action reaches it via the same
+ * `router.push('/receive')` pattern Send already uses.
  */
 function WalletReadyNavigator() {
   return (
@@ -85,6 +89,7 @@ function WalletReadyNavigator() {
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="send" />
       <Stack.Screen name="send-review" />
+      <Stack.Screen name="receive" />
     </Stack>
   );
 }
