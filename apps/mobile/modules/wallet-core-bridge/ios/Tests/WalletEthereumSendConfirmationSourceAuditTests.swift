@@ -56,7 +56,7 @@ final class WalletEthereumSendConfirmationSourceAuditTests: XCTestCase {
 
     func testBroadcastCallIsLexicallyAfterAndGatedBySuccessfulSigning() throws {
         let body = try confirmFunctionBody()
-        let signRange = try XCTUnwrap(body.range(of: "signed = await sign(toEthereumV1TransactionIntent(prepared));"))
+        let signRange = try XCTUnwrap(body.range(of: "signed = await sign(intent);"))
         let broadcastCallRange = try XCTUnwrap(body.range(of: "await broadcast(signed.signedTxHex, signerTxHash);"))
         XCTAssertTrue(signRange.upperBound < broadcastCallRange.lowerBound,
                       "broadcast must be lexically reachable only after a successful signed = await sign(...)")
@@ -214,11 +214,33 @@ final class WalletEthereumSendConfirmationSourceAuditTests: XCTestCase {
         XCTAssertFalse(source.contains("setPendingEthereumSend"), "Review must never re-set the pending snapshot — only a fresh Send-side prepare may do that")
     }
 
+    func testNativeEthSendRemainsAThinCompatibilityWrapper() throws {
+        let source = try mobileAppSource(at: "src/services/ethereum-send-confirmation.ts")
+        let start = try XCTUnwrap(
+            source.range(of: "export async function confirmAndSendEthereumV1(")
+        )
+        let end = try XCTUnwrap(
+            source.range(of: "\n}", range: start.upperBound..<source.endIndex)
+        )
+        let body = String(source[start.lowerBound..<end.upperBound])
+
+        XCTAssertTrue(body.contains("return confirmEthereumTransactionV1("))
+        XCTAssertTrue(body.contains("toEthereumV1TransactionIntent(prepared)"))
+        XCTAssertTrue(body.contains("deps"))
+
+        // The compatibility wrapper must never become a second signing or
+        // broadcast pipeline.
+        XCTAssertFalse(body.contains("await sign("))
+        XCTAssertFalse(body.contains("await broadcast("))
+        XCTAssertFalse(body.contains("signEthereumTransactionV1("))
+        XCTAssertFalse(body.contains("broadcastEthMainnetRawTransaction("))
+    }
+
     // MARK: - Helpers
 
     private func confirmFunctionBody() throws -> String {
         let source = try mobileAppSource(at: "src/services/ethereum-send-confirmation.ts")
-        let start = try XCTUnwrap(source.range(of: "export async function confirmAndSendEthereumV1("))
+        let start = try XCTUnwrap(source.range(of: "export async function confirmEthereumTransactionV1("))
         let end = try XCTUnwrap(source.range(of: "\n}", range: start.upperBound..<source.endIndex))
         return String(source[start.lowerBound..<end.upperBound])
     }

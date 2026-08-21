@@ -24,7 +24,10 @@ import { toEthereumTxHash, type EthereumTxHash } from 'chain-domain';
 
 import { toEthereumV1TransactionIntent, type EthereumV1PreparedSend } from './ethereum-send-preparation';
 import { broadcastEthMainnetRawTransaction } from './ethereum-rpc';
-import { signEthereumTransactionV1 } from './wallet-core-bridge';
+import {
+  signEthereumTransactionV1,
+  type EthereumV1TransactionIntent,
+} from './wallet-core-bridge';
 
 export type EthereumSendConfirmationErrorReason =
   | 'auth_or_signing_failed'
@@ -109,8 +112,8 @@ type ConfirmDependencies = {
  * mismatch — rejects with `EthereumSendConfirmationError`, never partially
  * resolves, never fabricates a hash.
  */
-export async function confirmAndSendEthereumV1(
-  prepared: EthereumV1PreparedSend,
+export async function confirmEthereumTransactionV1(
+  intent: EthereumV1TransactionIntent,
   deps: ConfirmDependencies = {},
 ): Promise<EthereumTxHash> {
   const sign = deps.sign ?? signEthereumTransactionV1;
@@ -119,13 +122,8 @@ export async function confirmAndSendEthereumV1(
   let signed: Awaited<ReturnType<typeof signEthereumTransactionV1>>;
   try {
     deps.onPhaseChange?.('signing');
-    signed = await sign(toEthereumV1TransactionIntent(prepared));
+    signed = await sign(intent);
   } catch {
-    // Covers authentication cancellation/failure AND any signing-layer
-    // failure alike — Stage 5G.1's `signEthereumTransactionV1` already
-    // collapses both into one generic rejection at the native boundary.
-    // Never a native error message, never any secret/key/authentication
-    // detail crosses here.
     throw new EthereumSendConfirmationError(
       'auth_or_signing_failed',
       'Authentication was cancelled or signing failed. Please try again.',
@@ -136,11 +134,6 @@ export async function confirmAndSendEthereumV1(
   try {
     signerTxHash = toEthereumTxHash(signed.txHashHex);
   } catch {
-    // Structurally shouldn't happen — the native signer always returns a
-    // well-formed hash (see `WalletNativeEthereumTransactionSigner.swift`)
-    // — but this boundary never trusts it blindly either, and a broadcast
-    // is never attempted with an unvalidated hash. No usable hash exists
-    // here (the one we got back couldn't even be validated), so `null`.
     throw new EthereumSendConfirmationError(
       'hash_mismatch',
       'Something went wrong confirming this transaction. Please try again.',
@@ -152,17 +145,13 @@ export async function confirmAndSendEthereumV1(
   const broadcastResult = await broadcast(signed.signedTxHex, signerTxHash);
 
   if (broadcastResult.outcome === 'ambiguous') {
-    // The node may have accepted the transaction even though this client
-    // never received a definitive response — never treated as safe to
-    // silently retry/rebroadcast from here. The caller (Review's confirm
-    // state machine) must not offer an immediate one-tap retry for this
-    // outcome.
     throw new EthereumSendConfirmationError(
       'broadcast_ambiguous',
       'Transaction status is uncertain. Please wait before trying again.',
       signerTxHash,
     );
   }
+
   if (broadcastResult.outcome === 'rejected') {
     throw new EthereumSendConfirmationError(
       'broadcast_rejected',
@@ -180,4 +169,22 @@ export async function confirmAndSendEthereumV1(
   }
 
   return broadcastResult.txHash;
+}
+
+/**
+ * Native ETH Send compatibility wrapper.
+ *
+ * Keeps the already-reviewed Send snapshot semantics unchanged while
+ * delegating the actual authenticated signing/broadcast pipeline to the
+ * generic Ethereum transaction coordinator used by future ERC-20 approval
+ * and Swap transactions.
+ */
+export async function confirmAndSendEthereumV1(
+  prepared: EthereumV1PreparedSend,
+  deps: ConfirmDependencies = {},
+): Promise<EthereumTxHash> {
+  return confirmEthereumTransactionV1(
+    toEthereumV1TransactionIntent(prepared),
+    deps,
+  );
 }
