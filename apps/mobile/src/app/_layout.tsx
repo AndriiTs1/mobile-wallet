@@ -90,6 +90,7 @@ function WalletReadyNavigator() {
       <Stack.Screen name="send" />
       <Stack.Screen name="send-review" />
       <Stack.Screen name="receive" />
+      <Stack.Screen name="swap" />
     </Stack>
   );
 }
