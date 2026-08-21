@@ -63,7 +63,6 @@ export default function ReceiveScreen() {
 
       await Share.share({
         title: 'Receive Ethereum',
-        message: `My public Ethereum address\n${state.address}\nNetwork: Ethereum Mainnet`,
         url: capturedUri,
       });
     } catch {
@@ -201,7 +200,7 @@ export default function ReceiveScreen() {
 
               <View style={styles.shareAddressPanel}>
                 <Text style={styles.shareAddress}>
-                  {`${state.address.slice(0, 10)}…${state.address.slice(-8)}`}
+                  {state.address}
                 </Text>
               </View>
 
@@ -482,8 +481,8 @@ const styles = StyleSheet.create({
   shareAddressPanel: {
     marginTop: 7,
     width: '100%',
-    minHeight: 54,
-    paddingHorizontal: 14,
+    minHeight: 66,
+    paddingHorizontal: 16,
     borderRadius: 14,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#6F5A28',
@@ -494,7 +493,8 @@ const styles = StyleSheet.create({
   shareAddress: {
     color: '#FFFFFF',
     fontFamily: 'ui-monospace',
-    fontSize: 16,
+    fontSize: 13,
+    lineHeight: 19,
     fontWeight: '700',
     textAlign: 'center',
   },
