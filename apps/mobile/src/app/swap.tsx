@@ -1,5 +1,6 @@
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   SUPPORTED_ASSETS,
@@ -15,10 +16,13 @@ import { ScreenHeader } from '@/components/screen-header';
 import { ScreenScaffold } from '@/components/screen-scaffold';
 import { Colors, Spacing } from '@/constants/theme';
 import { createSwissWalletSwapPriceTransport } from '@/services/swisswallet-swap-price-transport';
+import { createSwissWalletSwapQuoteTransport } from '@/services/swisswallet-swap-quote-transport';
 import {
   fetchZeroXAllowanceHolderPrice,
   type ZeroXAllowanceHolderPricePreview,
 } from '@/services/zero-x-allowance-holder-price-client';
+import { fetchZeroXAllowanceHolderQuote } from '@/services/zero-x-allowance-holder-quote-client';
+import { setPendingSwapQuote } from '@/services/swap-session';
 import { getEthereumAddressV1 } from '@/services/wallet-core-bridge';
 import { normalizeEthAmountDecimalSeparator } from '@/utils/amount-input';
 
@@ -50,6 +54,11 @@ type PriceState =
   | { status: 'ready'; preview: ZeroXAllowanceHolderPricePreview }
   | { status: 'error' };
 
+type ReviewState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'error' };
+
 function parseSwapEthAmount(input: string): SwapAmountState {
   if (input.length === 0) {
     return { status: 'empty' };
@@ -68,9 +77,13 @@ function parseSwapEthAmount(input: string): SwapAmountState {
 }
 
 export default function SwapScreen() {
+  const router = useRouter();
+
   const [amount, setAmount] = useState('');
   const [priceState, setPriceState] = useState<PriceState>({ status: 'idle' });
+  const [reviewState, setReviewState] = useState<ReviewState>({ status: 'idle' });
   const requestSequenceRef = useRef(0);
+  const reviewInFlightRef = useRef(false);
 
   const [walletAddress] = useState<EthereumAddress | null>(() => {
     try {
@@ -144,6 +157,56 @@ export default function SwapScreen() {
           USDC_DECIMALS,
         )
       : '0';
+
+  const canReview =
+    amountState.status === 'ready' &&
+    priceState.status === 'ready' &&
+    walletAddress !== null &&
+    reviewState.status !== 'loading';
+
+  const handleReviewSwap = async () => {
+    if (
+      !canReview ||
+      amountState.status !== 'ready' ||
+      !walletAddress ||
+      reviewInFlightRef.current
+    ) {
+      return;
+    }
+
+    const apiBaseUrl = process.env.EXPO_PUBLIC_SWISSWALLET_API_BASE_URL;
+
+    if (!apiBaseUrl) {
+      setReviewState({ status: 'error' });
+      return;
+    }
+
+    reviewInFlightRef.current = true;
+    setReviewState({ status: 'loading' });
+
+    try {
+      const transport = createSwissWalletSwapQuoteTransport(apiBaseUrl);
+
+      const quote = await fetchZeroXAllowanceHolderQuote(
+        {
+          chainId: 1,
+          sellAsset: ETH_ASSET,
+          buyAsset: USDC_ASSET,
+          sellAmount: amountState.sellAmount,
+          taker: walletAddress,
+        },
+        transport,
+      );
+
+      setPendingSwapQuote(quote);
+      reviewInFlightRef.current = false;
+      setReviewState({ status: 'idle' });
+      router.push('/swap-review');
+    } catch {
+      reviewInFlightRef.current = false;
+      setReviewState({ status: 'error' });
+    }
+  };
 
   return (
     <ScreenScaffold header={<ScreenHeader title="Swap" back />}>
@@ -246,12 +309,33 @@ export default function SwapScreen() {
           </Text>
         </View>
 
+        {reviewState.status === 'error' ? (
+          <Text
+            style={styles.reviewError}
+            accessible
+            accessibilityRole="alert">
+            Couldn’t prepare a firm swap quote. Please try again.
+          </Text>
+        ) : null}
+
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Review swap"
-          disabled
-          style={styles.reviewButton}>
-          <Text style={styles.reviewButtonText}>Review swap</Text>
+          accessibilityState={{
+            disabled: !canReview,
+            busy: reviewState.status === 'loading',
+          }}
+          disabled={!canReview}
+          onPress={handleReviewSwap}
+          style={[
+            styles.reviewButton,
+            !canReview && styles.reviewButtonDisabled,
+          ]}>
+          <Text style={styles.reviewButtonText}>
+            {reviewState.status === 'loading'
+              ? 'Preparing…'
+              : 'Review swap'}
+          </Text>
         </Pressable>
       </View>
     </ScreenScaffold>
@@ -392,6 +476,14 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
+  reviewError: {
+    marginTop: Spacing.three,
+    color: palette.negative,
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+
   reviewButton: {
     marginTop: Spacing.four,
     minHeight: 52,
@@ -399,6 +491,9 @@ const styles = StyleSheet.create({
     backgroundColor: palette.accentGold,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  reviewButtonDisabled: {
     opacity: 0.4,
   },
 
