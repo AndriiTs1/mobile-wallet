@@ -14,6 +14,9 @@ export { toEthereumAddress } from './ethereum-address';
 export type { EthereumTxHash } from './ethereum-tx-hash';
 export { toEthereumTxHash } from './ethereum-tx-hash';
 
+export type { EthereumCalldata } from './ethereum-calldata';
+export { toEthereumCalldata } from './ethereum-calldata';
+
 export type { AtomicAmount, DecimalString } from './amount';
 export { toAtomicAmount, toDecimalString } from './amount';
 
@@ -26,3 +29,6 @@ export type { BalanceSnapshot } from './balance-snapshot';
 export type { FeeQuote, BitcoinFeeQuote, EthereumFeeQuote } from './fee-quote';
 
 export type { BitcoinUtxo } from './bitcoin-utxo';
+
+export type { SwapQuote, SwapQuoteInput, EthereumSwapAsset } from './swap-quote';
+export { toSwapQuote } from './swap-quote';
