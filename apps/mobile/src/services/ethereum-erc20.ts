@@ -11,6 +11,8 @@ import {
 
 const BALANCE_OF_SELECTOR = '70a08231';
 const ALLOWANCE_SELECTOR = 'dd62ed3e';
+const APPROVE_SELECTOR = '095ea7b3';
+const MAX_UINT256 = (1n << 256n) - 1n;
 const UINT256_RESULT_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 
 export type EthereumErc20BalanceResult = {
@@ -34,6 +36,40 @@ function decodeUint256(result: string): AtomicAmount {
   }
 
   return toAtomicAmount(BigInt(result).toString(10));
+}
+
+
+function encodeUint256Argument(amount: AtomicAmount): string {
+  const value = BigInt(amount);
+
+  if (value > MAX_UINT256) {
+    throw new Error('ERC-20 uint256 amount exceeds 256-bit range');
+  }
+
+  return value.toString(16).padStart(64, '0');
+}
+
+/**
+ * Builds calldata for ERC-20 `approve(spender, amount)`.
+ *
+ * Pure builder only:
+ * - no RPC
+ * - no signing
+ * - no broadcast
+ * - no nonce/gas/fee selection
+ *
+ * V1 deliberately approves the exact requested amount rather than an
+ * unlimited allowance.
+ */
+export function buildErc20ApproveCalldata(
+  spender: EthereumAddress,
+  amount: AtomicAmount,
+): string {
+  return (
+    `0x${APPROVE_SELECTOR}` +
+    encodeAddressArgument(spender) +
+    encodeUint256Argument(amount)
+  );
 }
 
 /**
