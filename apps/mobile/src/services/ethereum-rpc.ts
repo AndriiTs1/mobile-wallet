@@ -319,7 +319,58 @@ export async function fetchEthMainnetPendingNonce(
 }
 
 // ----------------------------------------------------------------------------
-// B. EIP-1559 fee data
+// B. Read-only contract call
+// ----------------------------------------------------------------------------
+
+export type EthereumContractCallResult = {
+  readonly data: string;
+  readonly providerId: string;
+};
+
+/**
+ * Executes a read-only `eth_call` against Ethereum Mainnet at the `latest`
+ * block. This primitive never signs or broadcasts a transaction and never
+ * accepts private key material.
+ *
+ * `to` is a validated EthereumAddress. `data` must be a 0x-prefixed,
+ * even-length hex byte string. Provider failover is sequential, matching
+ * the established posture for all other read-only Ethereum RPC operations.
+ */
+export async function callEthMainnetContract(
+  to: EthereumAddress,
+  data: string,
+  providers: readonly EthereumRpcProvider[] = ETHEREUM_PROVIDERS,
+): Promise<EthereumContractCallResult> {
+  if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(data)) {
+    throw new Error('eth_call data must be a 0x-prefixed, even-length hex byte string');
+  }
+
+  const attempts: ProviderAttempt<string>[] = providers.map((provider) => ({
+    id: provider.id,
+    run: async () => {
+      const result = await callEthereumJsonRpc(provider.rpcUrl, 'eth_call', [
+        { to, data },
+        'latest',
+      ]);
+
+      if (typeof result !== 'string' || !/^0x(?:[0-9a-fA-F]{2})*$/.test(result)) {
+        throw new Error('eth_call returned malformed hex data');
+      }
+
+      return result;
+    },
+  }));
+
+  const { result, providerId } = await attemptProvidersInOrder(attempts);
+
+  return {
+    data: result,
+    providerId,
+  };
+}
+
+// ----------------------------------------------------------------------------
+// C. EIP-1559 fee data
 // ----------------------------------------------------------------------------
 
 export type EthereumFeeDataResult = {
@@ -461,7 +512,7 @@ export async function fetchEthMainnetFeeData(
 }
 
 // ----------------------------------------------------------------------------
-// C. Broadcast
+// D. Broadcast
 // ----------------------------------------------------------------------------
 
 export type EthereumBroadcastResult =
@@ -572,7 +623,7 @@ export async function broadcastEthMainnetRawTransaction(
 }
 
 // ----------------------------------------------------------------------------
-// D. Transaction / receipt lookup
+// E. Transaction / receipt lookup
 // ----------------------------------------------------------------------------
 
 export type EthereumTransactionLookupResult =
