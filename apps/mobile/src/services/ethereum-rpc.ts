@@ -370,7 +370,58 @@ export async function callEthMainnetContract(
 }
 
 // ----------------------------------------------------------------------------
-// C. EIP-1559 fee data
+// C. Gas estimation
+// ----------------------------------------------------------------------------
+
+export type EthereumGasEstimateResult = {
+  readonly gasLimit: number;
+  readonly providerId: string;
+};
+
+export async function estimateEthMainnetGas(
+  from: EthereumAddress,
+  to: EthereumAddress,
+  data: string,
+  valueWeiHex: string = '0x0',
+  providers: readonly EthereumRpcProvider[] = ETHEREUM_PROVIDERS,
+): Promise<EthereumGasEstimateResult> {
+  if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(data)) {
+    throw new Error('eth_estimateGas data must be a 0x-prefixed, even-length hex byte string');
+  }
+
+  const valueHex = assertHexQuantity(valueWeiHex, 'eth_estimateGas value');
+
+  const attempts: ProviderAttempt<number>[] = providers.map((provider) => ({
+    id: provider.id,
+    run: async () => {
+      const result = await callEthereumJsonRpc(provider.rpcUrl, 'eth_estimateGas', [
+        {
+          from,
+          to,
+          data,
+          value: valueHex,
+        },
+      ]);
+
+      const gasHex = assertHexQuantity(result, 'eth_estimateGas result');
+      return hexQuantityToSafeNonce(gasHex);
+    },
+  }));
+
+  const { result, providerId } = await attemptProvidersInOrder(attempts);
+
+  if (result <= 0) {
+    throw new Error('eth_estimateGas returned a non-positive gas limit');
+  }
+
+  return {
+    gasLimit: result,
+    providerId,
+  };
+}
+
+// ----------------------------------------------------------------------------
+// D. EIP-1559 fee data
 // ----------------------------------------------------------------------------
 
 export type EthereumFeeDataResult = {
@@ -512,7 +563,7 @@ export async function fetchEthMainnetFeeData(
 }
 
 // ----------------------------------------------------------------------------
-// D. Broadcast
+// E. Broadcast
 // ----------------------------------------------------------------------------
 
 export type EthereumBroadcastResult =
@@ -623,7 +674,7 @@ export async function broadcastEthMainnetRawTransaction(
 }
 
 // ----------------------------------------------------------------------------
-// E. Transaction / receipt lookup
+// F. Transaction / receipt lookup
 // ----------------------------------------------------------------------------
 
 export type EthereumTransactionLookupResult =
