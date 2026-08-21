@@ -18,7 +18,11 @@ export type { EthereumCalldata } from './ethereum-calldata';
 export { toEthereumCalldata } from './ethereum-calldata';
 
 export type { AtomicAmount, DecimalString } from './amount';
-export { toAtomicAmount, toDecimalString } from './amount';
+export {
+  toAtomicAmount,
+  toDecimalString,
+  formatAtomicAmountDecimal,
+} from './amount';
 
 export { parseEthDecimalStringToWei, formatWeiAsEthDecimalString } from './ethereum-amount';
 

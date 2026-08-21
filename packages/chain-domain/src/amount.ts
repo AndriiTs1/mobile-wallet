@@ -35,3 +35,40 @@ export function toDecimalString(value: string): DecimalString {
   }
   return value as DecimalString;
 }
+
+/**
+ * Formats an exact atomic-unit amount using the asset's configured decimal
+ * precision. BigInt/string arithmetic only — never Number/parseFloat.
+ *
+ * Examples:
+ *   formatAtomicAmountDecimal("2426414910", 6) -> "2426.41491"
+ *   formatAtomicAmountDecimal("1000000", 6)    -> "1"
+ */
+export function formatAtomicAmountDecimal(
+  amount: AtomicAmount,
+  decimals: number,
+): string {
+  if (!Number.isInteger(decimals) || decimals < 0) {
+    throw new Error('Asset decimals must be a non-negative integer.');
+  }
+
+  if (decimals === 0) {
+    return BigInt(amount).toString(10);
+  }
+
+  const divisor = 10n ** BigInt(decimals);
+  const value = BigInt(amount);
+  const whole = value / divisor;
+  const fraction = value % divisor;
+
+  if (fraction === 0n) {
+    return whole.toString(10);
+  }
+
+  const fractionDigits = fraction
+    .toString(10)
+    .padStart(decimals, '0')
+    .replace(/0+$/, '');
+
+  return `${whole.toString(10)}.${fractionDigits}`;
+}

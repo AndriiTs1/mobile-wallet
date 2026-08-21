@@ -1,20 +1,54 @@
 import { SymbolView } from 'expo-symbols';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { parseEthDecimalStringToWei, type AtomicAmount } from 'chain-domain';
+import {
+  SUPPORTED_ASSETS,
+  formatAtomicAmountDecimal,
+  parseEthDecimalStringToWei,
+  type AtomicAmount,
+  type EthereumAddress,
+  type EthereumSwapAsset,
+} from 'chain-domain';
 
 import { CoinBadge } from '@/components/coin-badge';
 import { ScreenHeader } from '@/components/screen-header';
 import { ScreenScaffold } from '@/components/screen-scaffold';
 import { Colors, Spacing } from '@/constants/theme';
+import { createSwissWalletSwapPriceTransport } from '@/services/swisswallet-swap-price-transport';
+import {
+  fetchZeroXAllowanceHolderPrice,
+  type ZeroXAllowanceHolderPricePreview,
+} from '@/services/zero-x-allowance-holder-price-client';
+import { getEthereumAddressV1 } from '@/services/wallet-core-bridge';
 import { normalizeEthAmountDecimalSeparator } from '@/utils/amount-input';
 
 const palette = Colors.dark;
+
+function getEthereumSwapAsset(symbol: 'ETH' | 'USDC'): EthereumSwapAsset {
+  const metadata = SUPPORTED_ASSETS.find((asset) => asset.symbol === symbol);
+
+  if (!metadata || metadata.assetId.chainId !== 'ethereum:mainnet') {
+    throw new Error(`Missing curated Ethereum asset: ${symbol}`);
+  }
+
+  return metadata.assetId;
+}
+
+const ETH_ASSET = getEthereumSwapAsset('ETH');
+const USDC_ASSET = getEthereumSwapAsset('USDC');
+const USDC_DECIMALS =
+  SUPPORTED_ASSETS.find((asset) => asset.symbol === 'USDC')?.decimals ?? 6;
 
 type SwapAmountState =
   | { status: 'empty' }
   | { status: 'invalid' }
   | { status: 'ready'; sellAmount: AtomicAmount };
+
+type PriceState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'ready'; preview: ZeroXAllowanceHolderPricePreview }
+  | { status: 'error' };
 
 function parseSwapEthAmount(input: string): SwapAmountState {
   if (input.length === 0) {
@@ -35,11 +69,81 @@ function parseSwapEthAmount(input: string): SwapAmountState {
 
 export default function SwapScreen() {
   const [amount, setAmount] = useState('');
+  const [priceState, setPriceState] = useState<PriceState>({ status: 'idle' });
+  const requestSequenceRef = useRef(0);
+
+  const [walletAddress] = useState<EthereumAddress | null>(() => {
+    try {
+      return getEthereumAddressV1();
+    } catch {
+      return null;
+    }
+  });
 
   const amountState = useMemo(
     () => parseSwapEthAmount(amount),
     [amount],
   );
+
+  useEffect(() => {
+    const requestSequence = ++requestSequenceRef.current;
+
+    if (amountState.status !== 'ready' || !walletAddress) {
+      setPriceState({ status: 'idle' });
+      return;
+    }
+
+    const apiBaseUrl = process.env.EXPO_PUBLIC_SWISSWALLET_API_BASE_URL;
+
+    if (!apiBaseUrl) {
+      setPriceState({ status: 'error' });
+      return;
+    }
+
+    setPriceState({ status: 'loading' });
+
+    const timer = setTimeout(() => {
+      const transport = createSwissWalletSwapPriceTransport(apiBaseUrl);
+
+      void fetchZeroXAllowanceHolderPrice(
+        {
+          chainId: 1,
+          sellAsset: ETH_ASSET,
+          buyAsset: USDC_ASSET,
+          sellAmount: amountState.sellAmount,
+          taker: walletAddress,
+        },
+        transport,
+      )
+        .then((preview) => {
+          if (requestSequence !== requestSequenceRef.current) {
+            return;
+          }
+
+          if (preview.liquidityAvailable === false) {
+            setPriceState({ status: 'error' });
+            return;
+          }
+
+          setPriceState({ status: 'ready', preview });
+        })
+        .catch(() => {
+          if (requestSequence === requestSequenceRef.current) {
+            setPriceState({ status: 'error' });
+          }
+        });
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [amountState, walletAddress]);
+
+  const receiveAmount =
+    priceState.status === 'ready'
+      ? formatAtomicAmountDecimal(
+          priceState.preview.buyAmount,
+          USDC_DECIMALS,
+        )
+      : '0';
 
   return (
     <ScreenScaffold header={<ScreenHeader title="Swap" back />}>
@@ -98,7 +202,9 @@ export default function SwapScreen() {
             </View>
           </View>
 
-          <Text style={styles.amount}>0</Text>
+          <Text style={styles.amount}>
+            {priceState.status === 'loading' ? '…' : receiveAmount}
+          </Text>
         </View>
 
         <View style={styles.networkRow}>
@@ -108,18 +214,35 @@ export default function SwapScreen() {
 
         <View style={styles.quotePlaceholder}>
           <Text style={styles.quoteTitle}>
-            {amountState.status === 'ready'
-              ? 'Ready for price preview'
-              : amountState.status === 'invalid'
-                ? 'Check the amount'
-                : 'Enter an amount'}
+            {priceState.status === 'loading'
+              ? 'Fetching live price…'
+              : priceState.status === 'ready'
+                ? 'Live price available'
+                : priceState.status === 'error'
+                  ? 'Price unavailable'
+                  : amountState.status === 'invalid'
+                    ? 'Check the amount'
+                    : amountState.status === 'ready'
+                      ? 'Preparing price preview'
+                      : 'Enter an amount'}
           </Text>
           <Text style={styles.quoteText}>
-            {amountState.status === 'ready'
-              ? 'A live swap price will appear here once the secure quote transport is connected.'
-              : amountState.status === 'invalid'
-                ? 'Use a positive ETH amount with up to 18 decimal places.'
-                : 'Your swap quote and estimated network cost will appear here.'}
+            {priceState.status === 'ready'
+              ? `Minimum receive: ${
+                  priceState.preview.minBuyAmount
+                    ? formatAtomicAmountDecimal(
+                        priceState.preview.minBuyAmount,
+                        USDC_DECIMALS,
+                      )
+                    : '—'
+                } USDC`
+              : priceState.status === 'error'
+                ? 'Couldn’t load a live swap price. Check the connection and try again.'
+                : amountState.status === 'invalid'
+                  ? 'Use a positive ETH amount with up to 18 decimal places.'
+                  : amountState.status === 'ready'
+                    ? 'Connecting securely to the swap price service.'
+                    : 'Your swap quote and estimated network cost will appear here.'}
           </Text>
         </View>
 
