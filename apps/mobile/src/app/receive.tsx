@@ -1,4 +1,5 @@
 import * as Clipboard from 'expo-clipboard';
+import * as FileSystem from 'expo-file-system/legacy';
 import { SymbolView } from 'expo-symbols';
 import { useRef, useState } from 'react';
 import { Pressable, Share, StyleSheet, Text, View } from 'react-native';
@@ -66,11 +67,26 @@ export default function ReceiveScreen() {
         });
       });
 
-      await Share.share({
-        title: 'Ethereum address',
-        message: `Ethereum Mainnet\n${state.address}`,
-        url: `data:image/png;base64,${qrData}`,
+      const cacheDirectory = FileSystem.cacheDirectory;
+      if (!cacheDirectory) {
+        throw new Error('Cache directory unavailable');
+      }
+
+      const qrFileUri = `${cacheDirectory}swisswallet-ethereum-receive-${Date.now()}.png`;
+
+      await FileSystem.writeAsStringAsync(qrFileUri, qrData, {
+        encoding: FileSystem.EncodingType.Base64,
       });
+
+      try {
+        await Share.share({
+          title: 'Ethereum address',
+          message: `Ethereum Mainnet\n${state.address}`,
+          url: qrFileUri,
+        });
+      } finally {
+        await FileSystem.deleteAsync(qrFileUri, { idempotent: true }).catch(() => {});
+      }
     } catch {
       // Share cancellation or export failure must never crash Receive.
     } finally {
