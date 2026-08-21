@@ -1,6 +1,6 @@
 import * as Clipboard from 'expo-clipboard';
 import { SymbolView } from 'expo-symbols';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import type { EthereumAddress } from 'chain-domain';
@@ -19,6 +19,10 @@ type AddressState =
   | { status: 'ready'; address: EthereumAddress }
   | { status: 'error' };
 
+type QRCodeRef = {
+  toDataURL: (callback: (data: string) => void) => void;
+};
+
 export default function ReceiveScreen() {
   const [state] = useState<AddressState>(() => {
     try {
@@ -29,6 +33,8 @@ export default function ReceiveScreen() {
   });
 
   const [copied, setCopied] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
+  const qrRef = useRef<QRCodeRef | null>(null);
 
   const handleCopy = async () => {
     if (state.status !== 'ready') return;
@@ -42,11 +48,34 @@ export default function ReceiveScreen() {
   };
 
   const handleShare = async () => {
-    if (state.status !== 'ready') return;
+    if (state.status !== 'ready' || isSharing) return;
 
-    await Share.share({
-      message: state.address,
-    });
+    const qrCode = qrRef.current;
+    if (!qrCode) return;
+
+    setIsSharing(true);
+
+    try {
+      const qrData = await new Promise<string>((resolve, reject) => {
+        qrCode.toDataURL((data) => {
+          if (data) {
+            resolve(data);
+          } else {
+            reject(new Error('QR export failed'));
+          }
+        });
+      });
+
+      await Share.share({
+        title: 'Ethereum address',
+        message: `Ethereum Mainnet\n${state.address}`,
+        url: `data:image/png;base64,${qrData}`,
+      });
+    } catch {
+      // Share cancellation or export failure must never crash Receive.
+    } finally {
+      setIsSharing(false);
+    }
   };
 
   return (
@@ -62,6 +91,9 @@ export default function ReceiveScreen() {
           <View style={styles.qrPanel}>
             <QRCode
               value={state.address}
+              getRef={(ref) => {
+                qrRef.current = ref;
+              }}
               size={196}
               backgroundColor="#FFFFFF"
               color="#000000"
@@ -106,7 +138,8 @@ export default function ReceiveScreen() {
 
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Share Ethereum address"
+            accessibilityLabel="Share Ethereum QR code and address"
+            disabled={isSharing}
             onPress={handleShare}
             style={({ pressed }) => [
               styles.shareButton,
@@ -118,7 +151,9 @@ export default function ReceiveScreen() {
               tintColor={palette.textSecondary}
               fallback={<Text style={styles.shareFallback}>↗</Text>}
             />
-            <Text style={styles.shareButtonText}>Share</Text>
+            <Text style={styles.shareButtonText}>
+              {isSharing ? 'Preparing…' : 'Share'}
+            </Text>
           </Pressable>
 
           <View style={styles.noticeRow}>
@@ -254,7 +289,8 @@ const styles = StyleSheet.create({
     marginTop: Spacing.three,
     width: '100%',
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    justifyContent: 'center',
     gap: Spacing.one + 2,
     backgroundColor: palette.backgroundElement,
     borderRadius: 14,
@@ -269,11 +305,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   noticeText: {
-    flex: 1,
     color: palette.textSecondary,
     fontSize: 12,
     fontWeight: '500',
     lineHeight: 17,
+    textAlign: 'center',
+    flexShrink: 1,
   },
 
   errorPanel: {
