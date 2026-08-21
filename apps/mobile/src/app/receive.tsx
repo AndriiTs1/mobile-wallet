@@ -63,7 +63,7 @@ export default function ReceiveScreen() {
 
       await Share.share({
         title: 'Receive Ethereum',
-        message: `SwissWallet · Ethereum Mainnet\n${state.address}`,
+        message: `My public Ethereum address\n${state.address}\nNetwork: Ethereum Mainnet`,
         url: capturedUri,
       });
     } catch {
@@ -174,24 +174,46 @@ export default function ReceiveScreen() {
                 <Text style={styles.shareBrandName}>SwissWallet</Text>
               </View>
 
+              <View style={styles.shareDivider}>
+                <View style={styles.shareDividerLine} />
+                <View style={styles.shareDividerDiamond} />
+                <View style={styles.shareDividerLine} />
+              </View>
+
               <Text style={styles.shareTitle}>Receive Ethereum</Text>
-              <Text style={styles.shareNetwork}>Ethereum Mainnet</Text>
+
+              <View style={styles.shareNetworkPill}>
+                <CoinBadge symbol="ETH" size={22} />
+                <Text style={styles.shareNetwork}>Ethereum Mainnet</Text>
+                <View style={styles.shareNetworkDot} />
+              </View>
 
               <View style={styles.shareQrPanel}>
                 <QRCode
                   value={state.address}
-                  size={230}
+                  size={224}
                   backgroundColor="#FFFFFF"
                   color="#000000"
                 />
               </View>
 
-              <Text style={styles.shareAddressLabel}>ETH address</Text>
-              <Text style={styles.shareAddress}>
-                {`${state.address.slice(0, 10)}…${state.address.slice(-8)}`}
-              </Text>
+              <Text style={styles.shareAddressLabel}>ETH ADDRESS</Text>
 
-              <Text style={styles.shareHint}>Scan to send ETH</Text>
+              <View style={styles.shareAddressPanel}>
+                <Text style={styles.shareAddress}>
+                  {`${state.address.slice(0, 10)}…${state.address.slice(-8)}`}
+                </Text>
+              </View>
+
+              <View style={styles.shareHintRow}>
+                <SymbolView
+                  name={{ ios: 'viewfinder' }}
+                  size={18}
+                  tintColor="#D6B15E"
+                  fallback={<Text style={styles.shareHintFallback}>⌗</Text>}
+                />
+                <Text style={styles.shareHint}>Scan to send ETH</Text>
+              </View>
             </View>
           </ViewShot>
         </View>
@@ -348,79 +370,152 @@ const styles = StyleSheet.create({
   },
   shareCard: {
     width: 360,
-    minHeight: 470,
-    backgroundColor: '#0A0B0F',
-    borderRadius: 28,
-    paddingHorizontal: 28,
-    paddingTop: 26,
-    paddingBottom: 28,
+    backgroundColor: '#090B10',
+    borderRadius: 26,
+    borderWidth: 1,
+    borderColor: '#D6B15E',
+    paddingHorizontal: 26,
+    paddingTop: 24,
+    paddingBottom: 26,
     alignItems: 'center',
   },
+
   shareBrandRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 9,
+    justifyContent: 'center',
+    gap: 10,
   },
   shareBrandMark: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    backgroundColor: palette.accentGold,
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D6B15E',
+    backgroundColor: '#17140D',
     alignItems: 'center',
     justifyContent: 'center',
   },
   shareBrandGlyph: {
-    color: '#0A0B0F',
-    fontSize: 16,
-    fontWeight: '800',
+    color: '#D6B15E',
+    fontSize: 21,
+    fontWeight: '900',
   },
   shareBrandName: {
     color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 23,
+    fontWeight: '800',
   },
+
+  shareDivider: {
+    width: '100%',
+    marginTop: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  shareDividerLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#6F5A28',
+  },
+  shareDividerDiamond: {
+    width: 8,
+    height: 8,
+    backgroundColor: '#D6B15E',
+    transform: [{ rotate: '45deg' }],
+  },
+
   shareTitle: {
-    marginTop: 24,
+    marginTop: 20,
     color: '#FFFFFF',
-    fontSize: 25,
+    fontSize: 27,
     fontWeight: '800',
     textAlign: 'center',
   },
-  shareNetwork: {
-    marginTop: 5,
-    color: '#989AA4',
-    fontSize: 13,
-    fontWeight: '600',
-    textAlign: 'center',
+
+  shareNetworkPill: {
+    marginTop: 14,
+    minHeight: 48,
+    paddingHorizontal: 16,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#625A45',
+    backgroundColor: '#15171D',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 9,
   },
+  shareNetwork: {
+    color: '#D8D8DC',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  shareNetworkDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#4AC66D',
+  },
+
   shareQrPanel: {
-    marginTop: 22,
-    padding: 13,
+    marginTop: 20,
+    padding: 12,
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
+    shadowColor: '#D6B15E',
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
   },
+
   shareAddressLabel: {
-    marginTop: 20,
-    color: '#989AA4',
+    marginTop: 19,
+    color: '#D6B15E',
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: '800',
+    letterSpacing: 1.2,
     textAlign: 'center',
+  },
+  shareAddressPanel: {
+    marginTop: 7,
+    width: '100%',
+    minHeight: 54,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#6F5A28',
+    backgroundColor: '#0E1117',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   shareAddress: {
-    marginTop: 5,
     color: '#FFFFFF',
     fontFamily: 'ui-monospace',
-    fontSize: 15,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  shareHint: {
-    marginTop: 16,
-    color: '#D6B15E',
-    fontSize: 13,
+    fontSize: 16,
     fontWeight: '700',
     textAlign: 'center',
+  },
+
+  shareHintRow: {
+    marginTop: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  shareHint: {
+    color: '#D6B15E',
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  shareHintFallback: {
+    color: '#D6B15E',
+    fontSize: 17,
+    fontWeight: '700',
   },
 
   errorPanel: {
