@@ -5,6 +5,7 @@ const ZERO_X_API_KEY = process.env.ZERO_X_API_KEY;
 
 const ZERO_X_BASE_URL = 'https://api.0x.org';
 const ZERO_X_PRICE_PATH = '/swap/allowance-holder/price';
+const ZERO_X_QUOTE_PATH = '/swap/allowance-holder/quote';
 const REQUEST_TIMEOUT_MS = 8_000;
 
 const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
@@ -87,7 +88,7 @@ function validatePriceRequest(url) {
   };
 }
 
-function buildZeroXPriceUrl(query) {
+function buildZeroXSwapUrl(path, query) {
   const params = new URLSearchParams();
 
   params.set('chainId', query.chainId);
@@ -96,7 +97,15 @@ function buildZeroXPriceUrl(query) {
   params.set('sellAmount', query.sellAmount);
   params.set('taker', query.taker);
 
-  return `${ZERO_X_BASE_URL}${ZERO_X_PRICE_PATH}?${params.toString()}`;
+  return `${ZERO_X_BASE_URL}${path}?${params.toString()}`;
+}
+
+function buildZeroXPriceUrl(query) {
+  return buildZeroXSwapUrl(ZERO_X_PRICE_PATH, query);
+}
+
+function buildZeroXQuoteUrl(query) {
+  return buildZeroXSwapUrl(ZERO_X_QUOTE_PATH, query);
 }
 
 async function handleSwapPrice(request, response, url) {
@@ -156,6 +165,62 @@ async function handleSwapPrice(request, response, url) {
   sendJson(response, 200, payload);
 }
 
+async function handleSwapQuote(request, response, url) {
+  if (request.method !== 'GET') {
+    response.setHeader('Allow', 'GET');
+    sendJson(response, 405, { error: 'method_not_allowed' });
+    return;
+  }
+
+  const validated = validatePriceRequest(url);
+
+  if (!validated.ok) {
+    sendJson(response, 400, { error: 'invalid_request' });
+    return;
+  }
+
+  if (!ZERO_X_API_KEY) {
+    sendJson(response, 503, { error: 'service_unavailable' });
+    return;
+  }
+
+  let upstream;
+
+  try {
+    upstream = await fetch(
+      buildZeroXQuoteUrl(validated.query),
+      {
+        method: 'GET',
+        headers: {
+          '0x-api-key': ZERO_X_API_KEY,
+          '0x-version': 'v2',
+          'Accept': 'application/json'
+        },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+      }
+    );
+  } catch {
+    sendJson(response, 502, { error: 'upstream_unavailable' });
+    return;
+  }
+
+  if (!upstream.ok) {
+    sendJson(response, 502, { error: 'upstream_rejected' });
+    return;
+  }
+
+  let payload;
+
+  try {
+    payload = await upstream.json();
+  } catch {
+    sendJson(response, 502, { error: 'upstream_malformed' });
+    return;
+  }
+
+  sendJson(response, 200, payload);
+}
+
 const server = createServer(async (request, response) => {
   const host = request.headers.host ?? 'localhost';
 
@@ -180,6 +245,11 @@ const server = createServer(async (request, response) => {
 
   if (url.pathname === '/v1/swap/price') {
     await handleSwapPrice(request, response, url);
+    return;
+  }
+
+  if (url.pathname === '/v1/swap/quote') {
+    await handleSwapQuote(request, response, url);
     return;
   }
 
