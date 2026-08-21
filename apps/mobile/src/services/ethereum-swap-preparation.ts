@@ -81,33 +81,48 @@ export async function prepareEthMainnetSwap(
     quote.transactionValueWei,
   );
 
-  const [nonceResult, feeResult, gasResult, balanceResult] =
+  const [nonceResult, feeResult, balanceResult] =
     await Promise.all([
       fetchEthMainnetPendingNonce(owner),
       fetchEthMainnetFeeData(),
-      estimateEthMainnetGas(
-        owner,
-        quote.transactionTarget,
-        quote.transactionCalldata,
-        transactionValueHex,
-      ),
       fetchEthMainnetBalance(owner),
     ]);
-
-  const maxFeeWeiBigInt =
-    BigInt(gasResult.gasLimit) *
-    BigInt(feeResult.feeQuote.maxFeePerGasWei);
 
   const transactionValueWeiBigInt = BigInt(
     quote.transactionValueWei,
   );
+
+  const ethBalanceWeiBigInt = BigInt(
+    balanceResult.snapshot.amount,
+  );
+
+  // Fail locally before eth_estimateGas when the wallet cannot even cover
+  // the ETH value sent by the swap. This avoids relying on provider-specific
+  // "insufficient funds" errors for an expected wallet-state condition.
+  if (transactionValueWeiBigInt > ethBalanceWeiBigInt) {
+    throw new EthereumSwapPreparationError(
+      'insufficient_eth',
+      'The wallet does not have enough ETH to cover the swap value and maximum network fee.',
+    );
+  }
+
+  const gasResult = await estimateEthMainnetGas(
+    owner,
+    quote.transactionTarget,
+    quote.transactionCalldata,
+    transactionValueHex,
+  );
+
+  const maxFeeWeiBigInt =
+    BigInt(gasResult.gasLimit) *
+    BigInt(feeResult.feeQuote.maxFeePerGasWei);
 
   const totalMaxEthDebitWeiBigInt =
     transactionValueWeiBigInt + maxFeeWeiBigInt;
 
   if (
     totalMaxEthDebitWeiBigInt >
-    BigInt(balanceResult.snapshot.amount)
+    ethBalanceWeiBigInt
   ) {
     throw new EthereumSwapPreparationError(
       'insufficient_eth',
