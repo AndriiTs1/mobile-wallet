@@ -38,14 +38,22 @@ const USDC_METADATA = SUPPORTED_ASSETS.find(
     asset.assetId.chainId === 'ethereum:mainnet',
 );
 
-if (!ETH_METADATA || !USDC_METADATA) {
+const USDT_METADATA = SUPPORTED_ASSETS.find(
+  (asset) =>
+    asset.symbol === 'USDT' &&
+    asset.assetId.kind === 'erc20' &&
+    asset.assetId.chainId === 'ethereum:mainnet',
+);
+
+if (!ETH_METADATA || !USDC_METADATA || !USDT_METADATA) {
   throw new Error(
-    'ETH or USDC metadata is missing from SUPPORTED_ASSETS.',
+    'ETH, USDC or USDT metadata is missing from SUPPORTED_ASSETS.',
   );
 }
 
 const ETH_DECIMALS = ETH_METADATA.decimals;
 const USDC_DECIMALS = USDC_METADATA.decimals;
+const USDT_DECIMALS = USDT_METADATA.decimals;
 
 type LiveHomeAsset = {
   symbol: 'BTC' | 'ETH' | 'USDC' | 'USDT' | 'XAUT';
@@ -99,9 +107,18 @@ export default function HomeScreen() {
         {
           symbol: 'USDT',
           name: 'Tether',
-          quantity: 0,
-          amountLabel: '0 USDT',
-          includeInTotal: false,
+          quantity: Number(
+            formatAtomicAmountDecimal(
+              portfolio.usdt.amount,
+              USDT_DECIMALS,
+            ),
+          ),
+          amountLabel: formatAtomicAssetAmountForDisplay(
+            portfolio.usdt.amount,
+            USDT_DECIMALS,
+            'USDT',
+          ),
+          includeInTotal: true,
         },
         {
           symbol: 'USDC',
