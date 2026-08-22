@@ -50,10 +50,11 @@ const ETH_DECIMALS = ETH_METADATA.decimals;
 const USDC_DECIMALS = USDC_METADATA.decimals;
 
 type LiveAsset = {
-  symbol: 'ETH' | 'USDC';
+  symbol: 'BTC' | 'ETH' | 'USDC' | 'USDT' | 'GOLD' | 'EUR';
   name: string;
   quantity: number;
   amountLabel: string;
+  includeInTotal: boolean;
 };
 
 export default function AssetsScreen() {
@@ -67,6 +68,13 @@ export default function AssetsScreen() {
   const liveAssets: LiveAsset[] = portfolio
     ? [
         {
+          symbol: 'BTC',
+          name: 'Bitcoin',
+          quantity: 0,
+          amountLabel: '0 BTC',
+          includeInTotal: false,
+        },
+        {
           symbol: 'ETH',
           name: 'Ethereum',
           quantity: Number(
@@ -79,6 +87,14 @@ export default function AssetsScreen() {
             portfolio.eth.amount,
             ETH_DECIMALS,
           )} ETH`,
+          includeInTotal: true,
+        },
+        {
+          symbol: 'USDT',
+          name: 'Tether',
+          quantity: 0,
+          amountLabel: '0 USDT',
+          includeInTotal: false,
         },
         {
           symbol: 'USDC',
@@ -93,12 +109,30 @@ export default function AssetsScreen() {
             portfolio.usdc.amount,
             USDC_DECIMALS,
           )} USDC`,
+          includeInTotal: true,
+        },
+        {
+          symbol: 'GOLD',
+          name: 'Swiss Gold',
+          quantity: 0,
+          amountLabel: '0 GOLD',
+          includeInTotal: false,
+        },
+        {
+          symbol: 'EUR',
+          name: 'Digital Euro',
+          quantity: 0,
+          amountLabel: '0 EUR',
+          includeInTotal: false,
         },
       ]
     : [];
 
   const totalValueChf = portfolio
-    ? computeTotalValueChf(liveAssets, prices)
+    ? computeTotalValueChf(
+        liveAssets.filter((asset) => asset.includeInTotal),
+        prices,
+      )
     : null;
 
   return (

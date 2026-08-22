@@ -47,10 +47,11 @@ const ETH_DECIMALS = ETH_METADATA.decimals;
 const USDC_DECIMALS = USDC_METADATA.decimals;
 
 type LiveHomeAsset = {
-  symbol: 'ETH' | 'USDC';
+  symbol: 'BTC' | 'ETH' | 'USDC' | 'USDT' | 'GOLD' | 'EUR';
   name: string;
   quantity: number;
   amountLabel: string;
+  includeInTotal: boolean;
 };
 
 const QUICK_ACTIONS: { label: string; symbol: SFSymbol; glyph: string }[] = [
@@ -72,6 +73,13 @@ export default function HomeScreen() {
   const liveAssets: LiveHomeAsset[] = portfolio
     ? [
         {
+          symbol: 'BTC',
+          name: 'Bitcoin',
+          quantity: 0,
+          amountLabel: '0 BTC',
+          includeInTotal: false,
+        },
+        {
           symbol: 'ETH',
           name: 'Ethereum',
           quantity: Number(
@@ -84,6 +92,14 @@ export default function HomeScreen() {
             portfolio.eth.amount,
             ETH_DECIMALS,
           )} ETH`,
+          includeInTotal: true,
+        },
+        {
+          symbol: 'USDT',
+          name: 'Tether',
+          quantity: 0,
+          amountLabel: '0 USDT',
+          includeInTotal: false,
         },
         {
           symbol: 'USDC',
@@ -98,16 +114,37 @@ export default function HomeScreen() {
             portfolio.usdc.amount,
             USDC_DECIMALS,
           )} USDC`,
+          includeInTotal: true,
+        },
+        {
+          symbol: 'GOLD',
+          name: 'Swiss Gold',
+          quantity: 0,
+          amountLabel: '0 GOLD',
+          includeInTotal: false,
+        },
+        {
+          symbol: 'EUR',
+          name: 'Digital Euro',
+          quantity: 0,
+          amountLabel: '0 EUR',
+          includeInTotal: false,
         },
       ]
     : [];
 
   const totalValueChf = portfolio
-    ? computeTotalValueChf(liveAssets, prices)
+    ? computeTotalValueChf(
+        liveAssets.filter((asset) => asset.includeInTotal),
+        prices,
+      )
     : null;
 
   const portfolioChangePercent = portfolio
-    ? computePortfolioChange24hPercent(liveAssets, prices)
+    ? computePortfolioChange24hPercent(
+        liveAssets.filter((asset) => asset.includeInTotal),
+        prices,
+      )
     : null;
   const isPortfolioPositive = portfolioChangePercent !== null ? portfolioChangePercent >= 0 : null;
   const changeColor =

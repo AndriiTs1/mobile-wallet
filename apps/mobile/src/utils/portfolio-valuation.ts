@@ -1,7 +1,41 @@
-import type { MockAsset } from '@/constants/mock-portfolio';
-import type { MarketPrices } from '@/services/market-data';
+import type {
+  CoinSymbol,
+  MockAsset,
+} from '@/constants/mock-portfolio';
+import type {
+  MarketPrices,
+  MarketSymbol,
+} from '@/services/market-data';
 
 export const VALUE_PLACEHOLDER = '—';
+
+function toMarketSymbol(
+  symbol: CoinSymbol,
+): MarketSymbol | null {
+  switch (symbol) {
+    case 'BTC':
+    case 'ETH':
+    case 'USDC':
+    case 'USDT':
+      return symbol;
+    case 'GOLD':
+    case 'EUR':
+      return null;
+  }
+}
+
+function getPriceEntry(
+  symbol: CoinSymbol,
+  prices: MarketPrices | null,
+) {
+  if (!prices) {
+    return null;
+  }
+
+  const marketSymbol = toMarketSymbol(symbol);
+
+  return marketSymbol ? prices[marketSymbol] : null;
+}
 
 export function formatChf(amountChf: number): string {
   return `CHF ${amountChf.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -12,13 +46,19 @@ export function formatChangePercent(percent: number): string {
   return `${sign}${percent.toFixed(2)}%`;
 }
 
-export function computeAssetValueChf(asset: MockAsset, prices: MarketPrices | null): number | null {
-  const priceEntry = prices?.[asset.symbol] ?? null;
-  return priceEntry ? asset.quantity * priceEntry.priceChf : null;
+export function computeAssetValueChf(
+  asset: MockAsset,
+  prices: MarketPrices | null,
+): number | null {
+  const priceEntry = getPriceEntry(asset.symbol, prices);
+
+  return priceEntry
+    ? asset.quantity * priceEntry.priceChf
+    : null;
 }
 
 export function computeAssetChange24hPercent(asset: MockAsset, prices: MarketPrices | null): number | null {
-  const priceEntry = prices?.[asset.symbol] ?? null;
+  const priceEntry = getPriceEntry(asset.symbol, prices);
   return priceEntry ? priceEntry.change24hPercent : null;
 }
 
@@ -27,11 +67,27 @@ export function toPositiveFlag(value: number | null): boolean | null {
   return value !== null ? value >= 0 : null;
 }
 
-export function computeTotalValueChf(assets: MockAsset[], prices: MarketPrices | null): number | null {
+export function computeTotalValueChf(
+  assets: MockAsset[],
+  prices: MarketPrices | null,
+): number | null {
   if (!prices) {
     return null;
   }
-  return assets.reduce((sum, asset) => sum + asset.quantity * prices[asset.symbol].priceChf, 0);
+
+  let total = 0;
+
+  for (const asset of assets) {
+    const priceEntry = getPriceEntry(asset.symbol, prices);
+
+    if (!priceEntry) {
+      return null;
+    }
+
+    total += asset.quantity * priceEntry.priceChf;
+  }
+
+  return total;
 }
 
 /**
@@ -52,9 +108,16 @@ export function computePortfolioChange24hPercent(
   let priorTotal = 0;
 
   for (const asset of assets) {
-    const priceEntry = prices[asset.symbol];
-    const currentValue = asset.quantity * priceEntry.priceChf;
-    const changePercent = priceEntry.change24hPercent ?? 0;
+    const priceEntry = getPriceEntry(asset.symbol, prices);
+
+    if (!priceEntry) {
+      return null;
+    }
+
+    const currentValue =
+      asset.quantity * priceEntry.priceChf;
+    const changePercent =
+      priceEntry.change24hPercent ?? 0;
 
     currentTotal += currentValue;
     priorTotal += currentValue / (1 + changePercent / 100);

@@ -11,7 +11,13 @@ export const mockChartValues = [
   0.56, 0.6, 0.58, 0.65, 0.7, 0.68, 0.76, 0.82,
 ];
 
-export type CoinSymbol = 'BTC' | 'ETH' | 'USDC' | 'USDT';
+export type CoinSymbol =
+  | 'BTC'
+  | 'ETH'
+  | 'USDC'
+  | 'USDT'
+  | 'GOLD'
+  | 'EUR';
 
 export type MockAsset = {
   symbol: CoinSymbol;
