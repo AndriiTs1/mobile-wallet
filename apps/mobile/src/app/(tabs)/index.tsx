@@ -24,6 +24,13 @@ import {
 
 const palette = Colors.dark;
 
+const BTC_METADATA = SUPPORTED_ASSETS.find(
+  (asset) =>
+    asset.symbol === 'BTC' &&
+    asset.assetId.kind === 'native' &&
+    asset.assetId.chainId === 'bitcoin:mainnet',
+);
+
 const ETH_METADATA = SUPPORTED_ASSETS.find(
   (asset) =>
     asset.symbol === 'ETH' &&
@@ -53,6 +60,7 @@ const XAUT_METADATA = SUPPORTED_ASSETS.find(
 );
 
 if (
+  !BTC_METADATA ||
   !ETH_METADATA ||
   !USDC_METADATA ||
   !USDT_METADATA ||
@@ -63,6 +71,7 @@ if (
   );
 }
 
+const BTC_DECIMALS = BTC_METADATA.decimals;
 const ETH_DECIMALS = ETH_METADATA.decimals;
 const USDC_DECIMALS = USDC_METADATA.decimals;
 const USDT_DECIMALS = USDT_METADATA.decimals;
@@ -97,9 +106,18 @@ export default function HomeScreen() {
         {
           symbol: 'BTC',
           name: 'Bitcoin',
-          quantity: 0,
-          amountLabel: '0 BTC',
-          includeInTotal: false,
+          quantity: Number(
+            formatAtomicAmountDecimal(
+              portfolio.btc.amount,
+              BTC_DECIMALS,
+            ),
+          ),
+          amountLabel: formatAtomicAssetAmountForDisplay(
+            portfolio.btc.amount,
+            BTC_DECIMALS,
+            'BTC',
+          ),
+          includeInTotal: true,
         },
         {
           symbol: 'ETH',

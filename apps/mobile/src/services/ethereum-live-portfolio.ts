@@ -4,6 +4,7 @@ import {
   type EthereumAddress,
 } from 'chain-domain';
 
+import { fetchBitcoinMainnetAddressProof } from './bitcoin-rpc';
 import { fetchEthMainnetErc20Balance } from './ethereum-erc20';
 import { fetchEthMainnetBalance } from './ethereum-rpc';
 
@@ -56,6 +57,10 @@ const XAUT_CONTRACT_ADDRESS =
   XAUT_ASSET.assetId.contractAddress;
 
 export type EthereumLivePortfolio = {
+  readonly btc: {
+    readonly amount: AtomicAmount;
+    readonly providerId: string;
+  };
   readonly eth: {
     readonly amount: AtomicAmount;
     readonly providerId: string;
@@ -91,10 +96,12 @@ export type EthereumLivePortfolio = {
  */
 export async function fetchEthereumLivePortfolio(
   owner: EthereumAddress,
+  bitcoinAddress: string,
 ): Promise<EthereumLivePortfolio> {
-  const [ethResult, usdcResult, usdtResult, xautResult] =
+  const [btcResult, ethResult, usdcResult, usdtResult, xautResult] =
     await Promise.all([
-      fetchEthMainnetBalance(owner),
+      fetchBitcoinMainnetAddressProof(bitcoinAddress),
+    fetchEthMainnetBalance(owner),
       fetchEthMainnetErc20Balance(
         USDC_CONTRACT_ADDRESS,
         owner,
@@ -110,6 +117,10 @@ export async function fetchEthereumLivePortfolio(
     ]);
 
   return {
+    btc: {
+      amount: btcResult.confirmedBalance.amount,
+      providerId: btcResult.providerId,
+    },
     eth: {
       amount: ethResult.snapshot.amount,
       providerId: ethResult.providerId,

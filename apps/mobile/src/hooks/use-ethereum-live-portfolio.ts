@@ -4,7 +4,10 @@ import {
   fetchEthereumLivePortfolio,
   type EthereumLivePortfolio,
 } from '@/services/ethereum-live-portfolio';
-import { getEthereumAddressV1 } from '@/services/wallet-core-bridge';
+import {
+  getBitcoinAddressV1,
+  getEthereumAddressV1,
+} from '@/services/wallet-core-bridge';
 
 export type EthereumLivePortfolioState = {
   readonly portfolio: EthereumLivePortfolio | null;
@@ -25,7 +28,12 @@ export function useEthereumLivePortfolio(): EthereumLivePortfolioState {
 
     try {
       const owner = getEthereumAddressV1();
-      const next = await fetchEthereumLivePortfolio(owner);
+      const bitcoinAddress = getBitcoinAddressV1();
+
+      const next = await fetchEthereumLivePortfolio(
+        owner,
+        bitcoinAddress,
+      );
 
       setPortfolio(next);
       setError(null);
