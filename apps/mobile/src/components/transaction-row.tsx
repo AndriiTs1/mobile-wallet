@@ -130,7 +130,9 @@ export function TransactionRow({
             { color: tint },
           ]}>
           {amountSign}
-          {transaction.amount}{' '}
+          {Number(transaction.amount).toLocaleString(undefined, {
+            maximumFractionDigits: 8,
+          })}{' '}
           {displaySymbol(transaction.asset)}
         </Text>
 
@@ -165,7 +167,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
-    flexShrink: 1,
+    flex: 1,
+    minWidth: 0,
   },
 
   coinWrap: {
@@ -191,6 +194,7 @@ const styles = StyleSheet.create({
 
   identityText: {
     flexShrink: 1,
+    minWidth: 0,
   },
 
   type: {
@@ -208,12 +212,14 @@ const styles = StyleSheet.create({
 
   figures: {
     alignItems: 'flex-end',
-    flexShrink: 0,
+    flexShrink: 1,
+    maxWidth: '62%',
   },
 
   amount: {
     fontSize: 13.5,
     fontWeight: '600',
+    textAlign: 'right',
   },
 
   meta: {
