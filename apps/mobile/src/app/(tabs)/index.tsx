@@ -7,6 +7,7 @@ import {
 } from 'chain-domain';
 
 import { AssetRow } from '@/components/asset-row';
+import { formatAtomicAssetAmountForDisplay } from '@/utils/asset-amount-display';
 import { ScreenScaffold } from '@/components/screen-scaffold';
 import { Colors, Spacing } from '@/constants/theme';
 import { useEthereumLivePortfolio } from '@/hooks/use-ethereum-live-portfolio';
@@ -88,10 +89,11 @@ export default function HomeScreen() {
               ETH_DECIMALS,
             ),
           ),
-          amountLabel: `${formatAtomicAmountDecimal(
+          amountLabel: formatAtomicAssetAmountForDisplay(
             portfolio.eth.amount,
             ETH_DECIMALS,
-          )} ETH`,
+            'ETH',
+          ),
           includeInTotal: true,
         },
         {
@@ -110,10 +112,11 @@ export default function HomeScreen() {
               USDC_DECIMALS,
             ),
           ),
-          amountLabel: `${formatAtomicAmountDecimal(
+          amountLabel: formatAtomicAssetAmountForDisplay(
             portfolio.usdc.amount,
             USDC_DECIMALS,
-          )} USDC`,
+            'USDC',
+          ),
           includeInTotal: true,
         },
         {

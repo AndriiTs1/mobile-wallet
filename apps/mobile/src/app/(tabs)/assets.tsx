@@ -5,6 +5,7 @@ import {
 } from 'chain-domain';
 
 import { AssetRow } from '@/components/asset-row';
+import { formatAtomicAssetAmountForDisplay } from '@/utils/asset-amount-display';
 import { BitcoinAddressProof } from '@/components/dev/bitcoin-address-proof';
 import { EthereumBalanceProof } from '@/components/dev/ethereum-balance-proof';
 import { EthereumSigningProof } from '@/components/dev/ethereum-signing-proof';
@@ -83,10 +84,11 @@ export default function AssetsScreen() {
               ETH_DECIMALS,
             ),
           ),
-          amountLabel: `${formatAtomicAmountDecimal(
+          amountLabel: formatAtomicAssetAmountForDisplay(
             portfolio.eth.amount,
             ETH_DECIMALS,
-          )} ETH`,
+            'ETH',
+          ),
           includeInTotal: true,
         },
         {
@@ -105,10 +107,11 @@ export default function AssetsScreen() {
               USDC_DECIMALS,
             ),
           ),
-          amountLabel: `${formatAtomicAmountDecimal(
+          amountLabel: formatAtomicAssetAmountForDisplay(
             portfolio.usdc.amount,
             USDC_DECIMALS,
-          )} USDC`,
+            'USDC',
+          ),
           includeInTotal: true,
         },
         {
