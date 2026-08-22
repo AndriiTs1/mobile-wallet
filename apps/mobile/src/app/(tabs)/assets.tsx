@@ -1,4 +1,8 @@
 import { StyleSheet, Text, View } from 'react-native';
+import {
+  SUPPORTED_ASSETS,
+  formatAtomicAmountDecimal,
+} from 'chain-domain';
 
 import { AssetRow } from '@/components/asset-row';
 import { BitcoinAddressProof } from '@/components/dev/bitcoin-address-proof';
@@ -8,7 +12,7 @@ import { WalletCoreProof } from '@/components/dev/wallet-core-proof';
 import { ScreenHeader } from '@/components/screen-header';
 import { ScreenScaffold } from '@/components/screen-scaffold';
 import { Colors, Spacing } from '@/constants/theme';
-import { mockAssets } from '@/constants/mock-portfolio';
+import { useEthereumLivePortfolio } from '@/hooks/use-ethereum-live-portfolio';
 import { useMarketPrices } from '@/hooks/use-market-prices';
 import {
   VALUE_PLACEHOLDER,
@@ -22,23 +26,80 @@ import {
 
 const palette = Colors.dark;
 
+const ETH_METADATA = SUPPORTED_ASSETS.find(
+  (asset) =>
+    asset.symbol === 'ETH' &&
+    asset.assetId.kind === 'native' &&
+    asset.assetId.chainId === 'ethereum:mainnet',
+);
+
+const USDC_METADATA = SUPPORTED_ASSETS.find(
+  (asset) =>
+    asset.symbol === 'USDC' &&
+    asset.assetId.kind === 'erc20' &&
+    asset.assetId.chainId === 'ethereum:mainnet',
+);
+
+if (!ETH_METADATA || !USDC_METADATA) {
+  throw new Error(
+    'ETH or USDC metadata is missing from SUPPORTED_ASSETS.',
+  );
+}
+
+const ETH_DECIMALS = ETH_METADATA.decimals;
+const USDC_DECIMALS = USDC_METADATA.decimals;
+
+type LiveAsset = {
+  symbol: 'ETH' | 'USDC';
+  name: string;
+  quantity: number;
+  amountLabel: string;
+};
+
 export default function AssetsScreen() {
-  const { prices, isLoading, error, isStale } = useMarketPrices();
+  const { prices } = useMarketPrices();
+  const {
+    portfolio,
+    isLoading: isPortfolioLoading,
+    error: portfolioError,
+  } = useEthereumLivePortfolio();
 
-  const totalValueChf = computeTotalValueChf(mockAssets, prices);
+  const liveAssets: LiveAsset[] = portfolio
+    ? [
+        {
+          symbol: 'ETH',
+          name: 'Ethereum',
+          quantity: Number(
+            formatAtomicAmountDecimal(
+              portfolio.eth.amount,
+              ETH_DECIMALS,
+            ),
+          ),
+          amountLabel: `${formatAtomicAmountDecimal(
+            portfolio.eth.amount,
+            ETH_DECIMALS,
+          )} ETH`,
+        },
+        {
+          symbol: 'USDC',
+          name: 'USD Coin',
+          quantity: Number(
+            formatAtomicAmountDecimal(
+              portfolio.usdc.amount,
+              USDC_DECIMALS,
+            ),
+          ),
+          amountLabel: `${formatAtomicAmountDecimal(
+            portfolio.usdc.amount,
+            USDC_DECIMALS,
+          )} USDC`,
+        },
+      ]
+    : [];
 
-  let statusText: string;
-  if (isLoading) {
-    statusText = 'fetching live prices…';
-  } else if (error && !prices) {
-    statusText = 'live prices unavailable.';
-  } else if (error) {
-    statusText = 'showing last known prices.';
-  } else if (isStale) {
-    statusText = 'live prices may be outdated.';
-  } else {
-    statusText = 'prices live via CoinGecko.';
-  }
+  const totalValueChf = portfolio
+    ? computeTotalValueChf(liveAssets, prices)
+    : null;
 
   return (
     <ScreenScaffold header={<ScreenHeader title="Assets" />}>
@@ -50,27 +111,42 @@ export default function AssetsScreen() {
       </View>
 
       <View style={styles.list}>
-        {mockAssets.map((asset) => {
-          const valueChf = computeAssetValueChf(asset, prices);
-          const change24hPercent = computeAssetChange24hPercent(asset, prices);
+        {!portfolio ? (
+          <Text style={styles.footnote}>
+            {isPortfolioLoading
+              ? 'Fetching wallet balances…'
+              : portfolioError
+                ? 'Wallet balances unavailable'
+                : 'Wallet balances unavailable'}
+          </Text>
+        ) : (
+          liveAssets.map((asset) => {
+            const valueChf = computeAssetValueChf(asset, prices);
+            const change24hPercent =
+              computeAssetChange24hPercent(asset, prices);
 
-          return (
-            <AssetRow
-              key={asset.symbol}
-              symbol={asset.symbol}
-              name={asset.name}
-              amountLabel={asset.amountLabel}
-              valueLabel={valueChf !== null ? formatChf(valueChf) : VALUE_PLACEHOLDER}
-              changeLabel={
-                change24hPercent !== null ? formatChangePercent(change24hPercent) : VALUE_PLACEHOLDER
-              }
-              isPositive={toPositiveFlag(change24hPercent)}
-            />
-          );
-        })}
+            return (
+              <AssetRow
+                key={asset.symbol}
+                symbol={asset.symbol}
+                name={asset.name}
+                amountLabel={asset.amountLabel}
+                valueLabel={
+                  valueChf !== null
+                    ? formatChf(valueChf)
+                    : VALUE_PLACEHOLDER
+                }
+                changeLabel={
+                  change24hPercent !== null
+                    ? formatChangePercent(change24hPercent)
+                    : VALUE_PLACEHOLDER
+                }
+                isPositive={toPositiveFlag(change24hPercent)}
+              />
+            );
+          })
+        )}
       </View>
-
-      <Text style={styles.footnote}>Asset quantities are demo data — {statusText}</Text>
 
       {__DEV__ ? <EthereumBalanceProof /> : null}
       {__DEV__ ? <BitcoinAddressProof /> : null}
