@@ -1,7 +1,10 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { formatWeiAsEthDecimalString, type EthereumAddress } from 'chain-domain';
+import {
+  formatWeiAsEthDecimalString,
+  type EthereumAddress,
+} from 'chain-domain';
 
 import { CoinBadge } from '@/components/coin-badge';
 import { ScreenHeader } from '@/components/screen-header';
@@ -13,6 +16,12 @@ import {
   prepareEthereumV1Send,
   type EthereumSendPreparationErrorReason,
 } from '@/services/ethereum-send-preparation';
+import {
+  EthereumErc20SendPreparationError,
+  prepareEthereumErc20Send,
+  type EthereumErc20SendPreparationErrorReason,
+  type EthereumErc20SendSymbol,
+} from '@/services/ethereum-erc20-send-preparation';
 import { setPendingEthereumSend } from '@/services/ethereum-send-session';
 import { getEthereumAddressV1 } from '@/services/wallet-core-bridge';
 import { normalizeEthAmountDecimalSeparator } from '@/utils/amount-input';
@@ -30,13 +39,42 @@ const ERROR_MESSAGES: Record<EthereumSendPreparationErrorReason, string> = {
   insufficient_funds: 'Your balance can’t cover this amount plus the network fee.',
   network_error: 'Couldn’t reach the Ethereum network. Please try again.',
 };
-const GENERIC_ERROR_MESSAGE = 'Something went wrong preparing this transaction. Please try again.';
+const ERC20_ERROR_MESSAGES: Record<
+  EthereumErc20SendPreparationErrorReason,
+  string
+> = {
+  unsupported_asset: 'This asset is not supported.',
+  invalid_recipient: 'Enter a valid Ethereum address.',
+  invalid_amount: 'Enter a valid token amount.',
+  insufficient_token_balance: 'Your token balance is too low.',
+  insufficient_eth_for_fee: 'You need more ETH to cover the network fee.',
+  network_error: 'Couldn’t reach the Ethereum network. Please try again.',
+};
+
+const GENERIC_ERROR_MESSAGE =
+  'Something went wrong preparing this transaction. Please try again.';
+
+type SendAssetSymbol =
+  | 'ETH'
+  | EthereumErc20SendSymbol;
+
+const SEND_ASSETS: readonly {
+  symbol: SendAssetSymbol;
+  name: string;
+}[] = [
+  { symbol: 'ETH', name: 'Ethereum' },
+  { symbol: 'USDT', name: 'Tether' },
+  { symbol: 'USDC', name: 'USD Coin' },
+  { symbol: 'XAUT', name: 'Tether Gold' },
+];
 
 type FormState = { status: 'idle' } | { status: 'preparing' } | { status: 'error'; message: string };
 
 export default function SendScreen() {
   const router = useRouter();
 
+  const [selectedSymbol, setSelectedSymbol] =
+    useState<SendAssetSymbol>('ETH');
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
   const [formState, setFormState] = useState<FormState>({ status: 'idle' });
@@ -83,32 +121,111 @@ export default function SendScreen() {
       // `amount` state itself, and therefore what the TextInput displays,
       // is never modified. The strict domain parser still receives, and
       // still alone decides, everything else about validity.
-      const normalizedAmount = normalizeEthAmountDecimalSeparator(amount);
-      const prepared = await prepareEthereumV1Send(recipient, normalizedAmount);
+      const normalizedAmount =
+        normalizeEthAmountDecimalSeparator(amount);
+
+      if (selectedSymbol === 'ETH') {
+        const prepared = await prepareEthereumV1Send(
+          recipient,
+          normalizedAmount,
+        );
+
+        setPendingEthereumSend({
+          kind: 'native',
+          prepared,
+        });
+      } else {
+        const prepared = await prepareEthereumErc20Send(
+          selectedSymbol,
+          recipient,
+          normalizedAmount,
+        );
+
+        setPendingEthereumSend({
+          kind: 'erc20',
+          prepared,
+        });
+      }
+
       isPreparingRef.current = false;
       setFormState({ status: 'idle' });
-      setPendingEthereumSend(prepared);
       router.push('/send-review');
     } catch (error) {
       isPreparingRef.current = false;
       const message =
         error instanceof EthereumSendPreparationError
           ? ERROR_MESSAGES[error.reason]
-          : GENERIC_ERROR_MESSAGE;
+          : error instanceof EthereumErc20SendPreparationError
+            ? ERC20_ERROR_MESSAGES[error.reason]
+            : GENERIC_ERROR_MESSAGE;
       setFormState({ status: 'error', message });
     }
-  }, [recipient, amount, router]);
+  }, [selectedSymbol, recipient, amount, router]);
 
   const isPreparing = formState.status === 'preparing';
   const canContinue = recipient.length > 0 && amount.length > 0 && !isPreparing;
 
   return (
     <ScreenScaffold header={<ScreenHeader title="Send" back />}>
+      <View style={styles.assetSelector}>
+        {SEND_ASSETS.map((asset) => {
+          const selected =
+            asset.symbol === selectedSymbol;
+
+          return (
+            <Pressable
+              key={asset.symbol}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              accessibilityLabel={`Send ${asset.name}`}
+              onPress={() => {
+                setSelectedSymbol(asset.symbol);
+                setAmount('');
+                setFormState({ status: 'idle' });
+              }}
+              style={[
+                styles.assetSelectorItem,
+                selected &&
+                  styles.assetSelectorItemSelected,
+              ]}>
+              <CoinBadge
+                symbol={asset.symbol}
+                size={27}
+              />
+              <Text
+                style={[
+                  styles.assetSelectorLabel,
+                  selected &&
+                    styles.assetSelectorLabelSelected,
+                ]}>
+                {asset.symbol === 'XAUT'
+                  ? 'XAU₮'
+                  : asset.symbol}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
       <View style={styles.assetRow}>
-        <CoinBadge symbol="ETH" size={28} />
+        <CoinBadge
+          symbol={selectedSymbol}
+          size={28}
+        />
         <View>
-          <Text style={styles.assetName}>Ethereum</Text>
-          <Text style={styles.assetSymbol}>ETH</Text>
+          <Text style={styles.assetName}>
+            {
+              SEND_ASSETS.find(
+                (asset) =>
+                  asset.symbol === selectedSymbol,
+              )?.name
+            }
+          </Text>
+          <Text style={styles.assetSymbol}>
+            {selectedSymbol === 'XAUT'
+              ? 'XAU₮'
+              : selectedSymbol}
+          </Text>
         </View>
       </View>
 
@@ -140,7 +257,11 @@ export default function SendScreen() {
             editable={!isPreparing}
             style={styles.amountInput}
           />
-          <Text style={styles.amountSuffix}>ETH</Text>
+          <Text style={styles.amountSuffix}>
+            {selectedSymbol === 'XAUT'
+              ? 'XAU₮'
+              : selectedSymbol}
+          </Text>
         </View>
         {walletAddress ? <AvailableBalance address={walletAddress} /> : null}
       </View>
@@ -192,6 +313,34 @@ function AvailableBalance({ address }: { address: EthereumAddress }) {
 }
 
 const styles = StyleSheet.create({
+  assetSelector: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: Spacing.four,
+  },
+  assetSelectorItem: {
+    flex: 1,
+    minHeight: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    borderRadius: 14,
+    backgroundColor: palette.backgroundElement,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.border,
+  },
+  assetSelectorItemSelected: {
+    borderColor: palette.accentGold,
+  },
+  assetSelectorLabel: {
+    color: palette.textSecondary,
+    fontSize: 10.5,
+    fontWeight: '600',
+  },
+  assetSelectorLabelSelected: {
+    color: palette.accentGold,
+  },
+
   assetRow: {
     flexDirection: 'row',
     alignItems: 'center',

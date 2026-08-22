@@ -10,8 +10,12 @@ import { Colors, Spacing } from '@/constants/theme';
 import {
   EthereumSendConfirmationError,
   confirmAndSendEthereumV1,
+  confirmEthereumTransactionV1,
   type EthereumSendConfirmationErrorReason,
 } from '@/services/ethereum-send-confirmation';
+import {
+  toEthereumErc20SendIntent,
+} from '@/services/ethereum-erc20-send-preparation';
 import { consumePendingEthereumSend } from '@/services/ethereum-send-session';
 import { checkEthereumSendStatus, type EthereumSendStatus } from '@/services/ethereum-send-status';
 
@@ -54,6 +58,21 @@ type ConfirmState =
   | { status: 'uncertain'; txHash: EthereumTxHash }
   | { status: 'error'; reason: EthereumSendConfirmationErrorReason };
 
+function formatAtomicTokenAmount(
+  amount: string,
+  decimals: number,
+): string {
+  const raw = amount.padStart(decimals + 1, '0');
+  const whole = raw.slice(0, -decimals);
+  const fraction = raw
+    .slice(-decimals)
+    .replace(/0+$/, '');
+
+  return fraction
+    ? `${whole}.${fraction}`
+    : whole;
+}
+
 function abbreviateTxHash(txHash: EthereumTxHash): string {
   return `${txHash.slice(0, 10)}…${txHash.slice(-6)}`;
 }
@@ -76,7 +95,9 @@ export default function SendReviewScreen() {
   // only on the very first render of this screen instance, never again,
   // so re-renders (e.g. from this component's own state changes) can never
   // consume a second time.
-  const [prepared] = useState(() => consumePendingEthereumSend());
+  const [pending] = useState(
+    () => consumePendingEthereumSend(),
+  );
   const [confirmState, setConfirmState] = useState<ConfirmState>({ status: 'ready' });
   // Single-flight guard against a duplicate concurrent confirm — e.g. a
   // fast double-tap before the first attempt's promise has settled. Mirrors
@@ -133,16 +154,35 @@ export default function SendReviewScreen() {
   }, []);
 
   const handleConfirm = useCallback(async () => {
-    if (!prepared || isConfirmingRef.current) {
+    if (!pending || isConfirmingRef.current) {
       return;
     }
     isConfirmingRef.current = true;
     setConfirmState({ status: 'signing' });
 
     try {
-      const txHash = await confirmAndSendEthereumV1(prepared, {
-        onPhaseChange: (phase) => setConfirmState({ status: phase }),
-      });
+      const txHash =
+        pending.kind === 'native'
+          ? await confirmAndSendEthereumV1(
+              pending.prepared,
+              {
+                onPhaseChange: (phase) =>
+                  setConfirmState({
+                    status: phase,
+                  }),
+              },
+            )
+          : await confirmEthereumTransactionV1(
+              toEthereumErc20SendIntent(
+                pending.prepared,
+              ),
+              {
+                onPhaseChange: (phase) =>
+                  setConfirmState({
+                    status: phase,
+                  }),
+              },
+            );
       isConfirmingRef.current = false;
       // Broadcast accepted: show "Transaction sent" / pending immediately —
       // never block the UI waiting for mining. No automatic lookup here;
@@ -177,7 +217,7 @@ export default function SendReviewScreen() {
         error instanceof EthereumSendConfirmationError ? error.reason : 'hash_mismatch';
       setConfirmState({ status: 'error', reason });
     }
-  }, [prepared, resolveStatus]);
+  }, [pending, resolveStatus]);
 
   const handleCheckStatus = useCallback(async () => {
     if (isCheckingStatusRef.current) {
@@ -195,7 +235,7 @@ export default function SendReviewScreen() {
     router.dismissAll();
   }, [router]);
 
-  if (!prepared) {
+  if (!pending) {
     return (
       <ScreenScaffold header={<ScreenHeader title="Review" back />}>
         <View style={styles.expiredPanel}>
@@ -213,7 +253,28 @@ export default function SendReviewScreen() {
     );
   }
 
-  const isBusy = confirmState.status === 'signing' || confirmState.status === 'broadcasting';
+  const prepared = pending.prepared;
+  const isErc20 = pending.kind === 'erc20';
+
+  const displaySymbol =
+    isErc20
+      ? prepared.symbol === 'XAUT'
+        ? 'XAU₮'
+        : prepared.symbol
+      : 'ETH';
+
+  const displayName =
+    isErc20
+      ? prepared.symbol === 'USDC'
+        ? 'USD Coin'
+        : prepared.symbol === 'USDT'
+          ? 'Tether'
+          : 'Tether Gold'
+      : 'Ethereum';
+
+  const isBusy =
+    confirmState.status === 'signing' ||
+    confirmState.status === 'broadcasting';
 
   if (
     confirmState.status === 'resolving' ||
@@ -228,26 +289,63 @@ export default function SendReviewScreen() {
   return (
     <ScreenScaffold header={<ScreenHeader title="Review" back={!isBusy} />}>
       <View style={styles.assetRow}>
-        <CoinBadge symbol="ETH" size={28} />
+        <CoinBadge
+          symbol={isErc20 ? prepared.symbol : 'ETH'}
+          size={28}
+        />
         <View>
-          <Text style={styles.assetName}>Ethereum</Text>
-          <Text style={styles.assetSymbol}>ETH</Text>
+          <Text style={styles.assetName}>
+            {displayName}
+          </Text>
+          <Text style={styles.assetSymbol}>
+            {displaySymbol}
+          </Text>
         </View>
       </View>
 
       <View style={styles.card}>
-        <ReviewRow label="Recipient" value={prepared.recipient} mono />
-        <ReviewRow label="Amount" value={`${formatWeiAsEthDecimalString(prepared.amountWei)} ETH`} />
+        <ReviewRow
+          label="Recipient"
+          value={prepared.recipient}
+          mono
+        />
+
+        <ReviewRow
+          label="Amount"
+          value={
+            isErc20
+              ? `${formatAtomicTokenAmount(
+                  prepared.amountAtomic,
+                  prepared.tokenDecimals,
+                )} ${displaySymbol}`
+              : `${formatWeiAsEthDecimalString(
+                  prepared.amountWei,
+                )} ETH`
+          }
+        />
+
         <ReviewRow
           label="Maximum network fee"
-          value={`${formatWeiAsEthDecimalString(prepared.maxFeeWei)} ETH`}
+          value={`${formatWeiAsEthDecimalString(
+            prepared.maxFeeWei,
+          )} ETH`}
         />
+
+        {!isErc20 ? (
+          <ReviewRow
+            label="Maximum total debit"
+            value={`${formatWeiAsEthDecimalString(
+              prepared.totalMaxDebitWei,
+            )} ETH`}
+            emphasized
+          />
+        ) : null}
+
         <ReviewRow
-          label="Maximum total debit"
-          value={`${formatWeiAsEthDecimalString(prepared.totalMaxDebitWei)} ETH`}
-          emphasized
+          label="Network"
+          value="Ethereum Mainnet"
+          last
         />
-        <ReviewRow label="Network" value="Ethereum" last />
       </View>
 
       {confirmState.status === 'error' ? (

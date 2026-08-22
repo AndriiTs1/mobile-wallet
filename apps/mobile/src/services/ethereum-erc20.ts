@@ -61,6 +61,34 @@ function encodeUint256Argument(amount: AtomicAmount): string {
  * V1 deliberately approves the exact requested amount rather than an
  * unlimited allowance.
  */
+
+/**
+ * Builds canonical ERC-20 `transfer(address,uint256)` calldata.
+ *
+ * PUBLIC-SAFE: recipient and amount are public transaction data.
+ * This helper performs encoding only — no signing, broadcasting, secret
+ * access, provider access, allowance mutation, or approval.
+ *
+ * Function selector:
+ *   transfer(address,uint256) -> 0xa9059cbb
+ */
+export function buildErc20TransferCalldata(
+  recipient: EthereumAddress,
+  amount: AtomicAmount,
+): `0x${string}` {
+  const addressHex = recipient.slice(2).toLowerCase();
+  const amountBigInt = BigInt(amount);
+
+  if (amountBigInt <= 0n) {
+    throw new Error('ERC-20 transfer amount must be positive');
+  }
+
+  const encodedAddress = addressHex.padStart(64, '0');
+  const encodedAmount = amountBigInt.toString(16).padStart(64, '0');
+
+  return `0xa9059cbb${encodedAddress}${encodedAmount}`;
+}
+
 export function buildErc20ApproveCalldata(
   spender: EthereumAddress,
   amount: AtomicAmount,
