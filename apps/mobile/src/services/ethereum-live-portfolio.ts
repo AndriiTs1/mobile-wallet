@@ -21,6 +21,13 @@ const USDT_ASSET = SUPPORTED_ASSETS.find(
     asset.assetId.chainId === 'ethereum:mainnet',
 );
 
+const XAUT_ASSET = SUPPORTED_ASSETS.find(
+  (asset) =>
+    asset.symbol === 'XAUT' &&
+    asset.assetId.kind === 'erc20' &&
+    asset.assetId.chainId === 'ethereum:mainnet',
+);
+
 if (!USDC_ASSET || USDC_ASSET.assetId.kind !== 'erc20') {
   throw new Error(
     'Ethereum Mainnet USDC is missing from SUPPORTED_ASSETS.',
@@ -33,11 +40,20 @@ if (!USDT_ASSET || USDT_ASSET.assetId.kind !== 'erc20') {
   );
 }
 
+if (!XAUT_ASSET || XAUT_ASSET.assetId.kind !== 'erc20') {
+  throw new Error(
+    'Ethereum Mainnet XAUT is missing from SUPPORTED_ASSETS.',
+  );
+}
+
 const USDC_CONTRACT_ADDRESS =
   USDC_ASSET.assetId.contractAddress;
 
 const USDT_CONTRACT_ADDRESS =
   USDT_ASSET.assetId.contractAddress;
+
+const XAUT_CONTRACT_ADDRESS =
+  XAUT_ASSET.assetId.contractAddress;
 
 export type EthereumLivePortfolio = {
   readonly eth: {
@@ -52,6 +68,10 @@ export type EthereumLivePortfolio = {
     readonly amount: AtomicAmount;
     readonly providerId: string;
   };
+  readonly xaut: {
+    readonly amount: AtomicAmount;
+    readonly providerId: string;
+  };
   readonly asOf: number;
 };
 
@@ -62,6 +82,7 @@ export type EthereumLivePortfolio = {
  * - native ETH via eth_getBalance
  * - USDC via ERC-20 balanceOf
  * - USDT via ERC-20 balanceOf
+ * - XAUT via ERC-20 balanceOf
  *
  * No signing.
  * No transaction creation.
@@ -71,17 +92,22 @@ export type EthereumLivePortfolio = {
 export async function fetchEthereumLivePortfolio(
   owner: EthereumAddress,
 ): Promise<EthereumLivePortfolio> {
-  const [ethResult, usdcResult, usdtResult] = await Promise.all([
-    fetchEthMainnetBalance(owner),
-    fetchEthMainnetErc20Balance(
-      USDC_CONTRACT_ADDRESS,
-      owner,
-    ),
-    fetchEthMainnetErc20Balance(
-      USDT_CONTRACT_ADDRESS,
-      owner,
-    ),
-  ]);
+  const [ethResult, usdcResult, usdtResult, xautResult] =
+    await Promise.all([
+      fetchEthMainnetBalance(owner),
+      fetchEthMainnetErc20Balance(
+        USDC_CONTRACT_ADDRESS,
+        owner,
+      ),
+      fetchEthMainnetErc20Balance(
+        USDT_CONTRACT_ADDRESS,
+        owner,
+      ),
+      fetchEthMainnetErc20Balance(
+        XAUT_CONTRACT_ADDRESS,
+        owner,
+      ),
+    ]);
 
   return {
     eth: {
@@ -95,6 +121,10 @@ export async function fetchEthereumLivePortfolio(
     usdt: {
       amount: usdtResult.amount,
       providerId: usdtResult.providerId,
+    },
+    xaut: {
+      amount: xautResult.amount,
+      providerId: xautResult.providerId,
     },
     asOf: Date.now(),
   };

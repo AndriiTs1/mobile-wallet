@@ -45,15 +45,28 @@ const USDT_METADATA = SUPPORTED_ASSETS.find(
     asset.assetId.chainId === 'ethereum:mainnet',
 );
 
-if (!ETH_METADATA || !USDC_METADATA || !USDT_METADATA) {
+const XAUT_METADATA = SUPPORTED_ASSETS.find(
+  (asset) =>
+    asset.symbol === 'XAUT' &&
+    asset.assetId.kind === 'erc20' &&
+    asset.assetId.chainId === 'ethereum:mainnet',
+);
+
+if (
+  !ETH_METADATA ||
+  !USDC_METADATA ||
+  !USDT_METADATA ||
+  !XAUT_METADATA
+) {
   throw new Error(
-    'ETH, USDC or USDT metadata is missing from SUPPORTED_ASSETS.',
+    'ETH, USDC, USDT or XAUT metadata is missing from SUPPORTED_ASSETS.',
   );
 }
 
 const ETH_DECIMALS = ETH_METADATA.decimals;
 const USDC_DECIMALS = USDC_METADATA.decimals;
 const USDT_DECIMALS = USDT_METADATA.decimals;
+const XAUT_DECIMALS = XAUT_METADATA.decimals;
 
 type LiveHomeAsset = {
   symbol: 'BTC' | 'ETH' | 'USDC' | 'USDT' | 'XAUT';
@@ -139,9 +152,18 @@ export default function HomeScreen() {
         {
           symbol: 'XAUT',
           name: 'Tether Gold',
-          quantity: 0,
-          amountLabel: '0 XAU₮',
-          includeInTotal: false,
+          quantity: Number(
+            formatAtomicAmountDecimal(
+              portfolio.xaut.amount,
+              XAUT_DECIMALS,
+            ),
+          ),
+          amountLabel: formatAtomicAssetAmountForDisplay(
+            portfolio.xaut.amount,
+            XAUT_DECIMALS,
+            'XAUT',
+          ),
+          includeInTotal: true,
         },
       ]
     : [];

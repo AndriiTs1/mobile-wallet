@@ -12,7 +12,7 @@ export type AssetId =
   | { readonly kind: 'native'; readonly chainId: 'ethereum:mainnet' }
   | { readonly kind: 'erc20'; readonly chainId: 'ethereum:mainnet'; readonly contractAddress: EthereumAddress };
 
-export type AssetSymbol = 'BTC' | 'ETH' | 'USDC' | 'USDT';
+export type AssetSymbol = 'BTC' | 'ETH' | 'USDC' | 'USDT' | 'XAUT';
 
 /**
  * Display/amount metadata associated with an `AssetId` — kept structurally
@@ -62,6 +62,16 @@ export const SUPPORTED_ASSETS: readonly AssetMetadata[] = [
     },
     symbol: 'USDT',
     name: 'Tether USD',
+    decimals: 6,
+  },
+  {
+    assetId: {
+      kind: 'erc20',
+      chainId: 'ethereum:mainnet',
+      contractAddress: toEthereumAddress('0x68749665FF8D2d112Fa859AA293F07A622782F38'),
+    },
+    symbol: 'XAUT',
+    name: 'Tether Gold',
     decimals: 6,
   },
 ];
