@@ -271,7 +271,9 @@ export default function HomeScreen() {
                     ? () => router.push('/receive')
                     : action.label === 'Swap'
                       ? () => router.push('/swap')
-                      : undefined
+                      : action.label === 'Buy'
+                        ? () => router.push('/buy')
+                        : undefined
               }
               style={({ pressed }) => [styles.actionCircle, pressed && styles.actionCirclePressed]}>
               <SymbolView
