@@ -14,7 +14,7 @@ import { Colors, Spacing } from '@/constants/theme';
 
 const palette = Colors.dark;
 
-type BuyAssetSymbol = 'BTC' | 'ETH' | 'USDC' | 'USDT';
+type BuyAssetSymbol = 'BTC' | 'ETH' | 'USDC' | 'USDT' | 'XAUT';
 
 const BUY_ASSETS: readonly {
   symbol: BuyAssetSymbol;
@@ -24,6 +24,7 @@ const BUY_ASSETS: readonly {
   { symbol: 'ETH', name: 'Ethereum' },
   { symbol: 'USDC', name: 'USD Coin' },
   { symbol: 'USDT', name: 'Tether' },
+  { symbol: 'XAUT', name: 'Tether Gold' },
 ];
 
 function isValidPositiveFiatAmount(value: string): boolean {
@@ -74,7 +75,7 @@ export default function BuyScreen() {
 
           return (
             <Pressable
-              key={asset.symbol}
+              key={asset.symbol === 'XAUT' ? 'XAU₮' : asset.symbol}
               accessibilityRole="button"
               accessibilityLabel={`Buy ${asset.name}`}
               accessibilityState={{ selected }}
@@ -108,7 +109,7 @@ export default function BuyScreen() {
 
       <View style={styles.assetRow}>
         <CoinBadge
-          symbol={selectedSymbol}
+          symbol={selectedSymbol === 'XAUT' ? 'XAU₮' : selectedSymbol}
           size={32}
         />
 
