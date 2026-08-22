@@ -9,31 +9,111 @@ import { CoinBadge } from '@/components/coin-badge';
 import { ScreenHeader } from '@/components/screen-header';
 import { ScreenScaffold } from '@/components/screen-scaffold';
 import { Colors, Spacing } from '@/constants/theme';
-import { getEthereumAddressV1 } from '@/services/wallet-core-bridge';
+import {
+  getBitcoinAddressV1,
+  getEthereumAddressV1,
+} from '@/services/wallet-core-bridge';
 
 const palette = Colors.dark;
 
-const GENERIC_ERROR_MESSAGE = 'Something went wrong loading your address. Please try again.';
+const GENERIC_ERROR_MESSAGE =
+  'Something went wrong loading your address. Please try again.';
+
+type ReceiveAssetSymbol =
+  | 'BTC'
+  | 'ETH'
+  | 'USDT'
+  | 'USDC'
+  | 'XAUT';
+
+type ReceiveAsset = {
+  readonly symbol: ReceiveAssetSymbol;
+  readonly displaySymbol: string;
+  readonly name: string;
+  readonly network: string;
+};
+
+const RECEIVE_ASSETS: readonly ReceiveAsset[] = [
+  {
+    symbol: 'BTC',
+    displaySymbol: 'BTC',
+    name: 'Bitcoin',
+    network: 'Bitcoin Mainnet',
+  },
+  {
+    symbol: 'ETH',
+    displaySymbol: 'ETH',
+    name: 'Ethereum',
+    network: 'Ethereum Mainnet',
+  },
+  {
+    symbol: 'USDT',
+    displaySymbol: 'USDT',
+    name: 'Tether',
+    network: 'Ethereum Mainnet',
+  },
+  {
+    symbol: 'USDC',
+    displaySymbol: 'USDC',
+    name: 'USD Coin',
+    network: 'Ethereum Mainnet',
+  },
+  {
+    symbol: 'XAUT',
+    displaySymbol: 'XAU₮',
+    name: 'Tether Gold',
+    network: 'Ethereum Mainnet',
+  },
+];
 
 type AddressState =
-  | { status: 'ready'; address: EthereumAddress }
+  | {
+      status: 'ready';
+      ethereumAddress: EthereumAddress;
+      bitcoinAddress: string;
+    }
   | { status: 'error' };
 
 export default function ReceiveScreen() {
   const [state] = useState<AddressState>(() => {
     try {
-      return { status: 'ready', address: getEthereumAddressV1() };
+      return {
+        status: 'ready',
+        ethereumAddress: getEthereumAddressV1(),
+        bitcoinAddress: getBitcoinAddressV1(),
+      };
     } catch {
       return { status: 'error' };
     }
   });
 
+  const [selectedSymbol, setSelectedSymbol] =
+    useState<ReceiveAssetSymbol>('ETH');
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = async () => {
-    if (state.status !== 'ready') return;
+  const selectedAsset =
+    RECEIVE_ASSETS.find(
+      (asset) => asset.symbol === selectedSymbol,
+    ) ?? RECEIVE_ASSETS[1];
 
-    await Clipboard.setStringAsync(state.address);
+  const selectedAddress =
+    state.status === 'ready'
+      ? selectedSymbol === 'BTC'
+        ? state.bitcoinAddress
+        : state.ethereumAddress
+      : null;
+
+  const handleSelectAsset = (
+    symbol: ReceiveAssetSymbol,
+  ) => {
+    setSelectedSymbol(symbol);
+    setCopied(false);
+  };
+
+  const handleCopy = async () => {
+    if (!selectedAddress) return;
+
+    await Clipboard.setStringAsync(selectedAddress);
     setCopied(true);
 
     setTimeout(() => {
@@ -41,57 +121,115 @@ export default function ReceiveScreen() {
     }, 1800);
   };
 
-
   return (
-    <ScreenScaffold header={<ScreenHeader title="Receive" back />}>
-      {state.status === 'ready' ? (
+    <ScreenScaffold
+      header={<ScreenHeader title="Receive" back />}>
+      {state.status === 'ready' && selectedAddress ? (
         <View style={styles.content}>
+          <View style={styles.assetSelector}>
+            {RECEIVE_ASSETS.map((asset) => {
+              const selected =
+                asset.symbol === selectedSymbol;
+
+              return (
+                <Pressable
+                  key={asset.symbol}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Receive ${asset.name}`}
+                  accessibilityState={{ selected }}
+                  onPress={() =>
+                    handleSelectAsset(asset.symbol)
+                  }
+                  style={[
+                    styles.assetSelectorItem,
+                    selected &&
+                      styles.assetSelectorItemSelected,
+                  ]}>
+                  <CoinBadge
+                    symbol={asset.symbol}
+                    size={27}
+                  />
+                  <Text
+                    style={[
+                      styles.assetSelectorLabel,
+                      selected &&
+                        styles.assetSelectorLabelSelected,
+                    ]}>
+                    {asset.displaySymbol}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
           <View style={styles.assetBlock}>
-            <CoinBadge symbol="ETH" size={44} />
-            <Text style={styles.assetName}>Ethereum</Text>
-            <Text style={styles.assetSymbol}>ETH · Ethereum Mainnet</Text>
+            <CoinBadge
+              symbol={selectedAsset.symbol}
+              size={44}
+            />
+
+            <Text style={styles.assetName}>
+              {selectedAsset.name}
+            </Text>
+
+            <Text style={styles.assetSymbol}>
+              {selectedAsset.displaySymbol} ·{' '}
+              {selectedAsset.network}
+            </Text>
           </View>
 
           <View style={styles.qrPanel}>
             <QRCode
-              value={state.address}
+              value={selectedAddress}
               size={196}
               backgroundColor="#FFFFFF"
               color="#000000"
             />
           </View>
 
-          <Text style={styles.addressLabel}>Your ETH address</Text>
+          <Text style={styles.addressLabel}>
+            Your {selectedAsset.displaySymbol} address
+          </Text>
 
           <Text
             style={styles.addressText}
             selectable
-            accessibilityLabel="Your Ethereum address">
-            {state.address}
+            accessibilityLabel={`Your ${selectedAsset.name} address`}>
+            {selectedAddress}
           </Text>
 
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Copy Ethereum address"
+            accessibilityLabel={`Copy ${selectedAsset.name} address`}
             onPress={handleCopy}
             style={({ pressed }) => [
               styles.copyButton,
               pressed && styles.copyButtonPressed,
             ]}>
             <SymbolView
-              name={{ ios: copied ? 'checkmark.circle.fill' : 'doc.on.doc' }}
+              name={{
+                ios: copied
+                  ? 'checkmark.circle.fill'
+                  : 'doc.on.doc',
+              }}
               size={19}
-              tintColor={copied ? palette.positive : palette.background}
+              tintColor={
+                copied
+                  ? palette.positive
+                  : palette.background
+              }
               fallback={
                 <Text style={styles.copyFallback}>
                   {copied ? '✓' : '▣'}
                 </Text>
               }
             />
+
             <Text
               style={[
                 styles.copyButtonText,
-                copied && styles.copyButtonTextCopied,
+                copied &&
+                  styles.copyButtonTextCopied,
               ]}>
               {copied ? 'Copied' : 'Copy address'}
             </Text>
@@ -102,17 +240,29 @@ export default function ReceiveScreen() {
               name={{ ios: 'info.circle' }}
               size={15}
               tintColor={palette.textSecondary}
-              fallback={<Text style={styles.noticeGlyphFallback}>ⓘ</Text>}
+              fallback={
+                <Text
+                  style={styles.noticeGlyphFallback}>
+                  ⓘ
+                </Text>
+              }
             />
+
             <Text style={styles.noticeText}>
-              Only send ETH on Ethereum Mainnet to this address.
+              {selectedSymbol === 'BTC'
+                ? 'Only send BTC on Bitcoin Mainnet to this address.'
+                : `Only send ${selectedAsset.displaySymbol} on Ethereum Mainnet to this address.`}
             </Text>
           </View>
-
         </View>
       ) : (
-        <View style={styles.errorPanel} accessible accessibilityRole="alert">
-          <Text style={styles.errorText}>{GENERIC_ERROR_MESSAGE}</Text>
+        <View
+          style={styles.errorPanel}
+          accessible
+          accessibilityRole="alert">
+          <Text style={styles.errorText}>
+            {GENERIC_ERROR_MESSAGE}
+          </Text>
         </View>
       )}
     </ScreenScaffold>
@@ -126,9 +276,43 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.four,
   },
 
+  assetSelector: {
+    width: '100%',
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: Spacing.four,
+  },
+
+  assetSelectorItem: {
+    flex: 1,
+    minHeight: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    borderRadius: 14,
+    backgroundColor: palette.backgroundElement,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.border,
+  },
+
+  assetSelectorItemSelected: {
+    borderColor: palette.accentGold,
+  },
+
+  assetSelectorLabel: {
+    color: palette.textSecondary,
+    fontSize: 10.5,
+    fontWeight: '600',
+  },
+
+  assetSelectorLabelSelected: {
+    color: palette.accentGold,
+  },
+
   assetBlock: {
     alignItems: 'center',
   },
+
   assetName: {
     marginTop: Spacing.one + 2,
     color: palette.text,
@@ -136,6 +320,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textAlign: 'center',
   },
+
   assetSymbol: {
     marginTop: 3,
     color: palette.textSecondary,
@@ -160,6 +345,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     textAlign: 'center',
   },
+
   addressText: {
     marginTop: Spacing.one,
     width: '100%',
@@ -188,17 +374,21 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     paddingHorizontal: Spacing.three,
   },
+
   copyButtonPressed: {
     opacity: 0.82,
   },
+
   copyButtonText: {
     color: palette.background,
     fontSize: 16,
     fontWeight: '700',
   },
+
   copyButtonTextCopied: {
     color: palette.background,
   },
+
   copyFallback: {
     color: palette.background,
     fontSize: 18,
@@ -219,11 +409,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.two,
   },
+
   noticeGlyphFallback: {
     color: palette.textSecondary,
     fontSize: 13,
     fontWeight: '600',
   },
+
   noticeText: {
     color: palette.textSecondary,
     fontSize: 12,
@@ -242,6 +434,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.two,
     paddingHorizontal: Spacing.three,
   },
+
   errorText: {
     color: palette.negative,
     fontSize: 13,
