@@ -30,6 +30,11 @@ declare class WalletCoreBridgeModule extends NativeModule<{}> {
   // deriveAddress(path), no arbitrary derivation-path parameter, no other
   // chain, no key-material primitive of any kind.
   getEthereumAddressV1(): string;
+  // Returns only the persisted wallet's public Bitcoin V1 RECEIVE
+  // address. Fixed BIP-84 mainnet derivation is native-only; no entropy,
+  // mnemonic, seed, private key, xpriv, arbitrary path/kind, or change
+  // address crosses this bridge.
+  getBitcoinAddressV1(): string;
   // Stage 5E.9B: secret-free. Returns only whether the backup
   // verification flow has ever completed — non-secret metadata, never any
   // wallet secret, byte content, or storage detail. Read-only: no

@@ -1260,6 +1260,23 @@ public func dangerousNativeOnlySignEthereumTransactionV1(entropy: Data, intent: 
 })
 }
 /**
+ * PUBLIC-SAFE. Derives only the fixed V1 Bitcoin mainnet receive
+ * address from canonical persisted entropy.
+ *
+ * Mirrors `derive_ethereum_v1_address_v1`: no arbitrary derivation
+ * path is accepted, and only the public BIP-84 receive address
+ * (`m/84'/0'/0'/0/0`) may cross the FFI boundary. Seed, mnemonic,
+ * private keys and Xpriv material never leave Rust.
+ */
+public func deriveBitcoinReceiveV1AddressV1(entropy: Data)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiWalletError_lift) {
+        uniffiCallStatus in
+    uniffi_wallet_core_fn_func_derive_bitcoin_receive_v1_address_v1(
+        FfiConverterData.lower(entropy),uniffiCallStatus
+    )
+})
+}
+/**
  * PUBLIC-SAFE, Stage 5G.2.0. Returns ONLY the public V1 Ethereum
  * address — never entropy, mnemonic, seed, private key, xpriv, or any
  * other secret material. Despite taking entropy as a parameter (the
@@ -1328,6 +1345,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallet_core_checksum_func_dangerous_native_only_sign_ethereum_transaction_v1() != 58861) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallet_core_checksum_func_derive_bitcoin_receive_v1_address_v1() != 43632) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallet_core_checksum_func_derive_ethereum_v1_address_v1() != 53403) {

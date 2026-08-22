@@ -22,6 +22,7 @@ export type { EthereumV1SignedTransaction, EthereumV1TransactionIntent };
 type WalletCoreBridgeApi = {
   hasWallet(): boolean;
   getEthereumAddressV1(): string;
+  getBitcoinAddressV1(): string;
   createWalletAndPresentBackup(): Promise<void>;
   presentBackupPhrase(): Promise<void>;
   hasBackupConfirmed(): boolean;
@@ -87,6 +88,46 @@ export function getEthereumAddressV1(): EthereumAddress {
     throw new Error('Native Wallet Core module unavailable in this runtime.');
   }
   return toEthereumAddress(bridge.getEthereumAddressV1());
+}
+
+
+/**
+ * Public Bitcoin V1 RECEIVE address for the persisted wallet.
+ *
+ * The native/Rust implementation is fixed to BIP-84 Bitcoin mainnet receive
+ * (`m/84'/0'/0'/0/0`). React Native receives only the resulting public
+ * address string — never entropy, mnemonic, seed, private key, xpriv,
+ * arbitrary derivation path, address kind, or change address.
+ *
+ * Defense in depth: V1 currently guarantees a lowercase native-SegWit
+ * P2WPKH mainnet address. Validate that narrow shape before trusting the
+ * native return value.
+ */
+export function getBitcoinAddressV1(): string {
+  const bridge = loadWalletCoreBridge();
+
+  if (!bridge) {
+    throw new Error(
+      'Native Wallet Core module unavailable in this runtime.',
+    );
+  }
+
+  const address = bridge.getBitcoinAddressV1();
+
+  // bc1q + 38 Bech32 characters = 42-character BIP-84 P2WPKH address.
+  // This is intentionally narrower than a generic Bitcoin address parser:
+  // SwissWallet V1 only derives this one address type.
+  if (
+    !/^bc1q[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{38}$/.test(
+      address,
+    )
+  ) {
+    throw new Error(
+      'Native Wallet Core returned an invalid Bitcoin V1 receive address.',
+    );
+  }
+
+  return address;
 }
 
 /**

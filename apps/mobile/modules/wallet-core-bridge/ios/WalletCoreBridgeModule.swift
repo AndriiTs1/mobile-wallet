@@ -83,6 +83,16 @@ public class WalletCoreBridgeModule: Module {
       try WalletNativeEthereumAddressProvider.address()
     }
 
+    // Public-data-only Bitcoin V1 RECEIVE address.
+    //
+    // Fixed BIP-84 mainnet receive path lives entirely in wallet-core.
+    // Takes no argument, exposes no arbitrary path/kind selector, no
+    // change address, and no secret material. Reading a public receive
+    // address deliberately requires no fresh biometric authorization.
+    Function("getBitcoinAddressV1") {
+      try WalletNativeBitcoinAddressProvider.receiveAddress()
+    }
+
     // Stage 5E.9B: secret-free. Returns only whether the backup
     // verification flow has ever completed — a read of non-secret
     // UserDefaults-backed metadata, structurally separate from

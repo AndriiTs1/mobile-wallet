@@ -924,6 +924,31 @@ mod ffi {
         result
     }
 
+    /// PUBLIC-SAFE. Derives only the fixed V1 Bitcoin mainnet receive
+    /// address from canonical persisted entropy.
+    ///
+    /// Mirrors `derive_ethereum_v1_address_v1`: no arbitrary derivation
+    /// path is accepted, and only the public BIP-84 receive address
+    /// (`m/84'/0'/0'/0/0`) may cross the FFI boundary. Seed, mnemonic,
+    /// private keys and Xpriv material never leave Rust.
+    #[uniffi::export]
+    pub fn derive_bitcoin_receive_v1_address_v1(
+        mut entropy: Vec<u8>,
+    ) -> Result<String, FfiWalletError> {
+        let result = wallet_secret::mnemonic_from_canonical_entropy_v1(&entropy)
+            .map_err(FfiWalletError::from)
+            .map(|mnemonic| wallet_secret::seed_from_mnemonic(&mnemonic, ""))
+            .map(|seed| {
+                derivation::derive_bitcoin_v1_address(
+                    seed.as_slice(),
+                    derivation::BitcoinAddressKindV1::Receive,
+                )
+                .to_string()
+            });
+        entropy.fill(0);
+        result
+    }
+
     /// PUBLIC-SAFE (input/output shape only — this record carries no secret
     /// field). Structured, public V1 Ethereum EIP-1559 transaction intent —
     /// see `signing::EthereumV1TransactionIntent`'s own doc comment for why
@@ -1811,6 +1836,58 @@ mod tests {
             let address = derive_ethereum_v1_address_v1(vec![0u8; 16]).expect("valid entropy");
             assert!(address.starts_with("0x"));
             assert_eq!(address.len(), 42);
+        }
+    }
+
+    mod ffi_bitcoin_receive_address {
+        use super::super::ffi::{FfiWalletError, derive_bitcoin_receive_v1_address_v1};
+
+        const EXPECTED_RECEIVE_ADDRESS: &str = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
+
+        #[test]
+        fn derives_expected_receive_address_from_valid_entropy() {
+            let address =
+                derive_bitcoin_receive_v1_address_v1(vec![0u8; 16]).expect("valid 16-byte entropy");
+            assert_eq!(address, EXPECTED_RECEIVE_ADDRESS);
+        }
+
+        #[test]
+        fn is_deterministic_for_the_same_entropy() {
+            let first = derive_bitcoin_receive_v1_address_v1(vec![0u8; 16]).expect("valid entropy");
+            let second =
+                derive_bitcoin_receive_v1_address_v1(vec![0u8; 16]).expect("valid entropy");
+            assert_eq!(first, second);
+        }
+
+        #[test]
+        fn distinct_entropy_derives_a_distinct_address() {
+            let first = derive_bitcoin_receive_v1_address_v1(vec![0u8; 16]).expect("valid entropy");
+            let second =
+                derive_bitcoin_receive_v1_address_v1(vec![0xAB; 16]).expect("valid entropy");
+            assert_ne!(first, second);
+        }
+
+        #[test]
+        fn invalid_entropy_length_fails_structurally() {
+            assert_eq!(
+                derive_bitcoin_receive_v1_address_v1(vec![0u8; 15]),
+                Err(FfiWalletError::InvalidEntropyLength)
+            );
+            assert_eq!(
+                derive_bitcoin_receive_v1_address_v1(vec![0u8; 32]),
+                Err(FfiWalletError::InvalidEntropyLength)
+            );
+            assert_eq!(
+                derive_bitcoin_receive_v1_address_v1(Vec::new()),
+                Err(FfiWalletError::InvalidEntropyLength)
+            );
+        }
+
+        #[test]
+        fn return_value_is_a_bare_public_receive_address_string() {
+            let address =
+                derive_bitcoin_receive_v1_address_v1(vec![0u8; 16]).expect("valid entropy");
+            assert!(address.starts_with("bc1q"));
         }
     }
 
