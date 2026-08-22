@@ -1,4 +1,4 @@
-import { SUPPORTED_ASSETS } from '@swiss-wallet/chain-domain';
+import { SUPPORTED_ASSETS } from 'chain-domain';
 
 import type {
   WalletActivityAsset,
