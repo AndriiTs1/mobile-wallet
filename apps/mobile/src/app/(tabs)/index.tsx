@@ -1,12 +1,15 @@
 import { Link, useRouter } from 'expo-router';
 import { SymbolView, type SFSymbol } from 'expo-symbols';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  SUPPORTED_ASSETS,
+  formatAtomicAmountDecimal,
+} from 'chain-domain';
 
 import { AssetRow } from '@/components/asset-row';
-import { PortfolioSparkline } from '@/components/portfolio-sparkline';
 import { ScreenScaffold } from '@/components/screen-scaffold';
 import { Colors, Spacing } from '@/constants/theme';
-import { mockAssets, mockChartValues } from '@/constants/mock-portfolio';
+import { useEthereumLivePortfolio } from '@/hooks/use-ethereum-live-portfolio';
 import { useMarketPrices } from '@/hooks/use-market-prices';
 import {
   VALUE_PLACEHOLDER,
@@ -20,6 +23,36 @@ import {
 
 const palette = Colors.dark;
 
+const ETH_METADATA = SUPPORTED_ASSETS.find(
+  (asset) =>
+    asset.symbol === 'ETH' &&
+    asset.assetId.kind === 'native' &&
+    asset.assetId.chainId === 'ethereum:mainnet',
+);
+
+const USDC_METADATA = SUPPORTED_ASSETS.find(
+  (asset) =>
+    asset.symbol === 'USDC' &&
+    asset.assetId.kind === 'erc20' &&
+    asset.assetId.chainId === 'ethereum:mainnet',
+);
+
+if (!ETH_METADATA || !USDC_METADATA) {
+  throw new Error(
+    'ETH or USDC metadata is missing from SUPPORTED_ASSETS.',
+  );
+}
+
+const ETH_DECIMALS = ETH_METADATA.decimals;
+const USDC_DECIMALS = USDC_METADATA.decimals;
+
+type LiveHomeAsset = {
+  symbol: 'ETH' | 'USDC';
+  name: string;
+  quantity: number;
+  amountLabel: string;
+};
+
 const QUICK_ACTIONS: { label: string; symbol: SFSymbol; glyph: string }[] = [
   { label: 'Send', symbol: 'arrow.up', glyph: '↑' },
   { label: 'Receive', symbol: 'arrow.down', glyph: '↓' },
@@ -30,9 +63,52 @@ const QUICK_ACTIONS: { label: string; symbol: SFSymbol; glyph: string }[] = [
 export default function HomeScreen() {
   const router = useRouter();
   const { prices } = useMarketPrices();
+  const {
+    portfolio,
+    isLoading: isPortfolioLoading,
+    error: portfolioError,
+  } = useEthereumLivePortfolio();
 
-  const totalValueChf = computeTotalValueChf(mockAssets, prices);
-  const portfolioChangePercent = computePortfolioChange24hPercent(mockAssets, prices);
+  const liveAssets: LiveHomeAsset[] = portfolio
+    ? [
+        {
+          symbol: 'ETH',
+          name: 'Ethereum',
+          quantity: Number(
+            formatAtomicAmountDecimal(
+              portfolio.eth.amount,
+              ETH_DECIMALS,
+            ),
+          ),
+          amountLabel: `${formatAtomicAmountDecimal(
+            portfolio.eth.amount,
+            ETH_DECIMALS,
+          )} ETH`,
+        },
+        {
+          symbol: 'USDC',
+          name: 'USD Coin',
+          quantity: Number(
+            formatAtomicAmountDecimal(
+              portfolio.usdc.amount,
+              USDC_DECIMALS,
+            ),
+          ),
+          amountLabel: `${formatAtomicAmountDecimal(
+            portfolio.usdc.amount,
+            USDC_DECIMALS,
+          )} USDC`,
+        },
+      ]
+    : [];
+
+  const totalValueChf = portfolio
+    ? computeTotalValueChf(liveAssets, prices)
+    : null;
+
+  const portfolioChangePercent = portfolio
+    ? computePortfolioChange24hPercent(liveAssets, prices)
+    : null;
   const isPortfolioPositive = portfolioChangePercent !== null ? portfolioChangePercent >= 0 : null;
   const changeColor =
     isPortfolioPositive === null
@@ -90,9 +166,6 @@ export default function HomeScreen() {
           <Text style={styles.changeWindow}>(24h)</Text>
         </View>
 
-        <View style={styles.chartWrap}>
-          <PortfolioSparkline values={mockChartValues} height={48} />
-        </View>
       </View>
 
       <View style={styles.actionsRow}>
@@ -134,24 +207,45 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.assetsList}>
-          {mockAssets.map((asset) => {
-            const valueChf = computeAssetValueChf(asset, prices);
-            const change24hPercent = computeAssetChange24hPercent(asset, prices);
+          {!portfolio ? (
+            <Text style={styles.balanceLabel}>
+              {isPortfolioLoading
+                ? 'Fetching wallet balances…'
+                : portfolioError
+                  ? 'Wallet balances unavailable'
+                  : 'Wallet balances unavailable'}
+            </Text>
+          ) : (
+            liveAssets.map((asset) => {
+              const valueChf = computeAssetValueChf(asset, prices);
+              const change24hPercent =
+                computeAssetChange24hPercent(asset, prices);
 
-            return (
-              <AssetRow
-                key={asset.symbol}
-                symbol={asset.symbol}
-                name={asset.name}
-                amountLabel={asset.amountLabel}
-                valueLabel={valueChf !== null ? formatChf(valueChf) : VALUE_PLACEHOLDER}
-                changeLabel={
-                  change24hPercent !== null ? formatChangePercent(change24hPercent) : VALUE_PLACEHOLDER
-                }
-                isPositive={change24hPercent !== null ? change24hPercent >= 0 : null}
-              />
-            );
-          })}
+              return (
+                <AssetRow
+                  key={asset.symbol}
+                  symbol={asset.symbol}
+                  name={asset.name}
+                  amountLabel={asset.amountLabel}
+                  valueLabel={
+                    valueChf !== null
+                      ? formatChf(valueChf)
+                      : VALUE_PLACEHOLDER
+                  }
+                  changeLabel={
+                    change24hPercent !== null
+                      ? formatChangePercent(change24hPercent)
+                      : VALUE_PLACEHOLDER
+                  }
+                  isPositive={
+                    change24hPercent !== null
+                      ? change24hPercent >= 0
+                      : null
+                  }
+                />
+              );
+            })
+          )}
         </View>
       </View>
     </ScreenScaffold>
