@@ -17,6 +17,7 @@ import {
   prepareEthMainnetSwap,
   type EthereumPreparedSwap,
 } from '@/services/ethereum-swap-preparation';
+import { refreshReviewedSwapQuote } from '@/services/swap-execution-quote';
 import { getEthereumAddressV1 } from '@/services/wallet-core-bridge';
 import { consumePendingSwapQuote } from '@/services/swap-session';
 
@@ -87,8 +88,25 @@ export default function SwapReviewScreen() {
     setPreparationState({ status: 'preparing' });
 
     try {
+      const apiBaseUrl =
+        process.env.EXPO_PUBLIC_SWISSWALLET_API_BASE_URL;
+
+      if (!apiBaseUrl) {
+        throw new Error('SwissWallet API base URL is unavailable.');
+      }
+
       const owner = getEthereumAddressV1();
-      const prepared = await prepareEthMainnetSwap(owner, quote);
+
+      const freshQuote = await refreshReviewedSwapQuote(
+        quote,
+        owner,
+        apiBaseUrl,
+      );
+
+      const prepared = await prepareEthMainnetSwap(
+        owner,
+        freshQuote,
+      );
 
       isPreparingRef.current = false;
       setPreparationState({ status: 'prepared', prepared });
