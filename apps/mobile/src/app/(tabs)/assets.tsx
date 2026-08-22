@@ -50,7 +50,7 @@ const ETH_DECIMALS = ETH_METADATA.decimals;
 const USDC_DECIMALS = USDC_METADATA.decimals;
 
 type LiveAsset = {
-  symbol: 'BTC' | 'ETH' | 'USDC' | 'USDT' | 'GOLD' | 'EUR';
+  symbol: 'BTC' | 'ETH' | 'USDC' | 'USDT' | 'XAUT';
   name: string;
   quantity: number;
   amountLabel: string;
@@ -112,17 +112,10 @@ export default function AssetsScreen() {
           includeInTotal: true,
         },
         {
-          symbol: 'GOLD',
-          name: 'Swiss Gold',
+          symbol: 'XAUT',
+          name: 'Tether Gold',
           quantity: 0,
-          amountLabel: '0 GOLD',
-          includeInTotal: false,
-        },
-        {
-          symbol: 'EUR',
-          name: 'Digital Euro',
-          quantity: 0,
-          amountLabel: '0 EUR',
+          amountLabel: '0 XAU₮',
           includeInTotal: false,
         },
       ]

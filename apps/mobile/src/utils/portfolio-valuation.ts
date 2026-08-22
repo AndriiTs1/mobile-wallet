@@ -18,8 +18,7 @@ function toMarketSymbol(
     case 'USDC':
     case 'USDT':
       return symbol;
-    case 'GOLD':
-    case 'EUR':
+    case 'XAUT':
       return null;
   }
 }

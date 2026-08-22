@@ -16,8 +16,7 @@ export type CoinSymbol =
   | 'ETH'
   | 'USDC'
   | 'USDT'
-  | 'GOLD'
-  | 'EUR';
+  | 'XAUT';
 
 export type MockAsset = {
   symbol: CoinSymbol;

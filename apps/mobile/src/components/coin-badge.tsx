@@ -1,4 +1,5 @@
 import { Image, StyleSheet, Text, View } from 'react-native';
+import { SymbolView } from 'expo-symbols';
 
 import type { CoinSymbol } from '@/constants/mock-portfolio';
 import { Colors } from '@/constants/theme';
@@ -33,38 +34,49 @@ export function CoinBadge({
     );
   }
 
-  return (
-    <View
-      style={[
-        styles.fallback,
-        {
-          width: size,
-          height: size,
-          borderRadius: size / 2,
-        },
-      ]}>
-      <Text
+  if (symbol === 'XAUT') {
+    return (
+      <View
         style={[
-          styles.fallbackText,
-          { fontSize: Math.max(10, size * 0.3) },
+          styles.goldBadge,
+          {
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+          },
         ]}>
-        {symbol === 'GOLD' ? 'Au' : '€'}
-      </Text>
-    </View>
-  );
+        <SymbolView
+          name={{ ios: 'cube.fill' }}
+          size={size * 0.44}
+          tintColor={palette.accentGold}
+          fallback={
+            <Text
+              style={[
+                styles.goldFallback,
+                { fontSize: Math.max(10, size * 0.28) },
+              ]}>
+              Au
+            </Text>
+          }
+        />
+      </View>
+    );
+  }
+
+  return null;
 }
 
 const styles = StyleSheet.create({
-  fallback: {
+  goldBadge: {
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: palette.backgroundElement,
-    borderWidth: 1,
-    borderColor: palette.border,
+    borderWidth: 1.5,
+    borderColor: palette.accentGold,
   },
 
-  fallbackText: {
-    color: palette.text,
+  goldFallback: {
+    color: palette.accentGold,
     fontWeight: '800',
   },
 });
