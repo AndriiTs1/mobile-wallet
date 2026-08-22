@@ -27,6 +27,33 @@ struct EthereumV1SignedTransactionOutput: Record {
   @Field var txHashHex: String = ""
 }
 
+
+// Bitcoin V1 signing input. PUBLIC transaction data only.
+// Satoshi-denominated values use UInt64 natively; the TypeScript boundary
+// will use decimal strings where needed to avoid JS precision ambiguity.
+struct BitcoinV1InputRecord: Record {
+  @Field var txid: String = ""
+  @Field var vout: UInt32 = 0
+  @Field var valueSat: String = ""
+}
+
+// PUBLIC structured Bitcoin V1 transaction intent.
+// No private key, entropy, seed, mnemonic, xpriv, derivation path,
+// precomputed sighash, scriptCode, or witness field exists here.
+struct BitcoinV1TransactionIntentInput: Record {
+  @Field var inputs: [BitcoinV1InputRecord] = []
+  @Field var destinationAddress: String = ""
+  @Field var amountSat: String = ""
+  @Field var changeAddress: String?
+  @Field var changeSat: String = ""
+}
+
+// The only Bitcoin signing data allowed back to React Native.
+struct BitcoinV1SignedTransactionOutput: Record {
+  @Field var signedTxHex: String = ""
+  @Field var txid: String = ""
+}
+
 public class WalletCoreBridgeModule: Module {
   public func definition() -> ModuleDefinition {
     Name("WalletCoreBridge")
@@ -183,6 +210,56 @@ public class WalletCoreBridgeModule: Module {
       let output = EthereumV1SignedTransactionOutput()
       output.signedTxHex = signed.signedTxHex
       output.txHashHex = signed.txHashHex
+      return output
+    }
+
+    // Bitcoin V1 production signing bridge.
+    //
+    // Receives PUBLIC structured transaction data only.
+    // WalletNativeBitcoinTransactionSigner performs fresh device-owner
+    // authentication before reading secure storage, then invokes the one
+    // native-only Rust Bitcoin signer.
+    //
+    // SECURITY: no authorization state is reusable. requestAppUnlock,
+    // recovery reveal, Ethereum signing, or any earlier Bitcoin signing
+    // never substitutes for this operation's own fresh authentication.
+    //
+    // No network access and no broadcast occur in this call.
+    AsyncFunction("signBitcoinTransactionV1") {
+      (intent: BitcoinV1TransactionIntentInput) -> BitcoinV1SignedTransactionOutput in
+
+      guard
+        let amountSat = UInt64(intent.amountSat),
+        let changeSat = UInt64(intent.changeSat)
+      else {
+        throw WalletBitcoinSigningError.failed
+      }
+
+      let nativeInputs: [WalletBitcoinV1Input] = try intent.inputs.map { input in
+        guard let valueSat = UInt64(input.valueSat) else {
+          throw WalletBitcoinSigningError.failed
+        }
+
+        return WalletBitcoinV1Input(
+          txid: input.txid,
+          vout: input.vout,
+          valueSat: valueSat
+        )
+      }
+
+      let signed = try await WalletNativeBitcoinTransactionSigner.sign(
+        intent: WalletBitcoinV1TransactionIntent(
+          inputs: nativeInputs,
+          destinationAddress: intent.destinationAddress,
+          amountSat: amountSat,
+          changeAddress: intent.changeAddress,
+          changeSat: changeSat
+        )
+      )
+
+      let output = BitcoinV1SignedTransactionOutput()
+      output.signedTxHex = signed.signedTxHex
+      output.txid = signed.txid
       return output
     }
 

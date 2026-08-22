@@ -25,6 +25,11 @@ import {
 import { setPendingEthereumSend } from '@/services/ethereum-send-session';
 import { getEthereumAddressV1 } from '@/services/wallet-core-bridge';
 import { normalizeEthAmountDecimalSeparator } from '@/utils/amount-input';
+import { fetchBitcoinMainnetAddressProof } from '@/services/bitcoin-rpc';
+import { fetchBitcoinMainnetFeeRate } from '@/services/bitcoin-fees';
+import { prepareBitcoinSend } from '@/services/bitcoin-send-preparation';
+import { setPendingBitcoinSend } from '@/services/bitcoin-send-session';
+import { getBitcoinAddressV1 } from '@/services/wallet-core-bridge';
 
 const palette = Colors.dark;
 
@@ -55,6 +60,7 @@ const GENERIC_ERROR_MESSAGE =
   'Something went wrong preparing this transaction. Please try again.';
 
 type SendAssetSymbol =
+  | 'BTC'
   | 'ETH'
   | EthereumErc20SendSymbol;
 
@@ -62,6 +68,7 @@ const SEND_ASSETS: readonly {
   symbol: SendAssetSymbol;
   name: string;
 }[] = [
+  { symbol: 'BTC', name: 'Bitcoin' },
   { symbol: 'ETH', name: 'Ethereum' },
   { symbol: 'USDT', name: 'Tether' },
   { symbol: 'USDC', name: 'USD Coin' },
@@ -69,6 +76,27 @@ const SEND_ASSETS: readonly {
 ];
 
 type FormState = { status: 'idle' } | { status: 'preparing' } | { status: 'error'; message: string };
+
+function parseBitcoinAmountToSats(value: string): bigint {
+  const normalized = value.replace(',', '.').trim();
+
+  if (!/^\d+(?:\.\d{0,8})?$/.test(normalized)) {
+    throw new Error('Enter a valid BTC amount.');
+  }
+
+  const [wholePart, fractionPart = ''] = normalized.split('.');
+  const fraction = fractionPart.padEnd(8, '0');
+
+  const sats =
+    BigInt(wholePart) * 100_000_000n +
+    BigInt(fraction || '0');
+
+  if (sats <= 0n) {
+    throw new Error('Enter a valid BTC amount.');
+  }
+
+  return sats;
+}
 
 export default function SendScreen() {
   const router = useRouter();
@@ -90,6 +118,14 @@ export default function SendScreen() {
   const [walletAddress] = useState<EthereumAddress | null>(() => {
     try {
       return getEthereumAddressV1();
+    } catch {
+      return null;
+    }
+  });
+
+  const [bitcoinAddress] = useState<string | null>(() => {
+    try {
+      return getBitcoinAddressV1();
     } catch {
       return null;
     }
@@ -124,7 +160,53 @@ export default function SendScreen() {
       const normalizedAmount =
         normalizeEthAmountDecimalSeparator(amount);
 
-      if (selectedSymbol === 'ETH') {
+      if (selectedSymbol === 'BTC') {
+        if (!bitcoinAddress) {
+          throw new Error('Bitcoin wallet address is unavailable.');
+        }
+
+        const amountSats = parseBitcoinAmountToSats(amount);
+
+        const [proof, feeRate] = await Promise.all([
+          fetchBitcoinMainnetAddressProof(bitcoinAddress),
+          fetchBitcoinMainnetFeeRate(),
+        ]);
+
+        const prepared = prepareBitcoinSend({
+          utxos: proof.utxos,
+          amountSats,
+          feeRateSatPerVbyte: feeRate.satPerVbyte,
+        });
+
+        setPendingBitcoinSend({
+          kind: 'bitcoin',
+          recipient,
+          amountSat: prepared.amountSats.toString(),
+          feeSat: prepared.feeSats.toString(),
+          totalDebitSat: (
+            prepared.amountSats + prepared.feeSats
+          ).toString(),
+          intent: {
+            inputs: prepared.inputs.map((input) => ({
+              txid: input.txid,
+              vout: input.vout,
+              valueSat: input.valueSats.toString(),
+            })),
+            destinationAddress: recipient,
+            amountSat: prepared.amountSats.toString(),
+
+            // V1 currently observes the fixed receive address as its
+            // address-level Bitcoin balance, so change deliberately returns
+            // to that same controlled address. No private material is involved.
+            changeAddress:
+              prepared.changeSats > 0n
+                ? bitcoinAddress
+                : null,
+
+            changeSat: prepared.changeSats.toString(),
+          },
+        });
+      } else if (selectedSymbol === 'ETH') {
         const prepared = await prepareEthereumV1Send(
           recipient,
           normalizedAmount,
@@ -153,11 +235,13 @@ export default function SendScreen() {
     } catch (error) {
       isPreparingRef.current = false;
       const message =
-        error instanceof EthereumSendPreparationError
-          ? ERROR_MESSAGES[error.reason]
-          : error instanceof EthereumErc20SendPreparationError
-            ? ERC20_ERROR_MESSAGES[error.reason]
-            : GENERIC_ERROR_MESSAGE;
+        selectedSymbol === 'BTC' && error instanceof Error
+          ? error.message
+          : error instanceof EthereumSendPreparationError
+            ? ERROR_MESSAGES[error.reason]
+            : error instanceof EthereumErc20SendPreparationError
+              ? ERC20_ERROR_MESSAGES[error.reason]
+              : GENERIC_ERROR_MESSAGE;
       setFormState({ status: 'error', message });
     }
   }, [selectedSymbol, recipient, amount, router]);
@@ -234,7 +318,11 @@ export default function SendScreen() {
         <TextInput
           value={recipient}
           onChangeText={handleRecipientChange}
-          placeholder="0x…"
+          placeholder={
+            selectedSymbol === 'BTC'
+              ? 'bc1…'
+              : '0x…'
+          }
           placeholderTextColor={palette.textSecondary}
           autoCapitalize="none"
           autoCorrect={false}
@@ -263,7 +351,13 @@ export default function SendScreen() {
               : selectedSymbol}
           </Text>
         </View>
-        {walletAddress ? <AvailableBalance address={walletAddress} /> : null}
+        {selectedSymbol === 'BTC'
+          ? bitcoinAddress
+            ? <BitcoinAvailableBalance address={bitcoinAddress} />
+            : null
+          : walletAddress
+            ? <AvailableBalance address={walletAddress} />
+            : null}
       </View>
 
       {formState.status === 'error' ? (
@@ -297,6 +391,57 @@ export default function SendScreen() {
  * decision remains entirely inside `prepareEthereumV1Send`; this display
  * never gates or disables the Continue action.
  */
+function BitcoinAvailableBalance({
+  address,
+}: {
+  address: string;
+}) {
+  const [label, setLabel] = useState(
+    'Available: fetching balance…',
+  );
+
+  useEffect(() => {
+    let active = true;
+
+    void fetchBitcoinMainnetAddressProof(address)
+      .then((proof) => {
+        if (!active) return;
+
+        const sats = proof.utxos.reduce(
+          (sum, utxo) => sum + BigInt(utxo.value),
+          0n,
+        );
+
+        const whole = sats / 100_000_000n;
+        const fraction = (sats % 100_000_000n)
+          .toString()
+          .padStart(8, '0')
+          .replace(/0+$/, '');
+
+        const value = fraction
+          ? `${whole}.${fraction}`
+          : whole.toString();
+
+        setLabel(`Available: ${value} BTC`);
+      })
+      .catch(() => {
+        if (active) {
+          setLabel('Available balance unavailable');
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [address]);
+
+  return (
+    <Text style={styles.balanceHint}>
+      {label}
+    </Text>
+  );
+}
+
 function AvailableBalance({ address }: { address: EthereumAddress }) {
   const { snapshot, isLoading } = useEthereumBalanceProof(address);
 

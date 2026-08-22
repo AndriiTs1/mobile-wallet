@@ -22,3 +22,30 @@ export type EthereumV1SignedTransaction = {
   signedTxHex: string;
   txHashHex: string;
 };
+
+
+// Bitcoin V1 signing input. PUBLIC transaction data only.
+// Satoshi values are decimal strings across the JS boundary so no value can
+// be silently rounded by JavaScript number precision.
+export type BitcoinV1Input = {
+  txid: string;
+  vout: number;
+  valueSat: string;
+};
+
+// PUBLIC structured Bitcoin V1 transaction intent.
+// No entropy, mnemonic, seed, private key, xpriv, derivation path,
+// precomputed sighash, scriptCode, or witness field exists here.
+export type BitcoinV1TransactionIntent = {
+  inputs: BitcoinV1Input[];
+  destinationAddress: string;
+  amountSat: string;
+  changeAddress?: string | null;
+  changeSat: string;
+};
+
+// The only Bitcoin signing data allowed back to React Native.
+export type BitcoinV1SignedTransaction = {
+  signedTxHex: string;
+  txid: string;
+};

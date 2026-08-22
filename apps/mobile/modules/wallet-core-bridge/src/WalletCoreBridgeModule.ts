@@ -1,6 +1,11 @@
 import { NativeModule, requireNativeModule } from 'expo';
 
-import type { EthereumV1SignedTransaction, EthereumV1TransactionIntent } from './WalletCoreBridge.types';
+import type {
+  BitcoinV1SignedTransaction,
+  BitcoinV1TransactionIntent,
+  EthereumV1SignedTransaction,
+  EthereumV1TransactionIntent,
+} from './WalletCoreBridge.types';
 
 declare class WalletCoreBridgeModule extends NativeModule<{}> {
   getVersion(): string;
@@ -76,6 +81,15 @@ declare class WalletCoreBridgeModule extends NativeModule<{}> {
   // failure (authentication or signing). The private key never crosses
   // this boundary, or any boundary — it never leaves native Rust code.
   signEthereumTransactionV1(intent: EthereumV1TransactionIntent): Promise<EthereumV1SignedTransaction>;
+
+  // Bitcoin V1 production signing bridge.
+  // PUBLIC structured transaction data only.
+  // Native performs fresh device-owner authentication before
+  // secure-storage access. Returns only signed tx hex + txid.
+  // Signing only — no broadcast.
+  signBitcoinTransactionV1(
+    intent: BitcoinV1TransactionIntent,
+  ): Promise<BitcoinV1SignedTransaction>;
   // Stage 5E.9E2: DEV-ONLY. Only exists as a callable native method in
   // DEBUG builds (the underlying Swift Function is compiled out entirely
   // in Release — see WalletCoreBridgeModule.swift) — RN must only ever

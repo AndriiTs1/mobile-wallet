@@ -17,6 +17,8 @@ import {
   toEthereumErc20SendIntent,
 } from '@/services/ethereum-erc20-send-preparation';
 import { consumePendingEthereumSend } from '@/services/ethereum-send-session';
+import { consumePendingBitcoinSend } from '@/services/bitcoin-send-session';
+import { executeBitcoinV1Send } from '@/services/bitcoin-send-execution';
 import { checkEthereumSendStatus, type EthereumSendStatus } from '@/services/ethereum-send-status';
 
 const palette = Colors.dark;
@@ -73,8 +75,21 @@ function formatAtomicTokenAmount(
     : whole;
 }
 
-function abbreviateTxHash(txHash: EthereumTxHash): string {
+function abbreviateTxHash(txHash: string): string {
   return `${txHash.slice(0, 10)}…${txHash.slice(-6)}`;
+}
+
+function formatSatsAsBtc(satsDecimal: string): string {
+  const sats = BigInt(satsDecimal);
+  const whole = sats / 100_000_000n;
+  const fraction = (sats % 100_000_000n)
+    .toString()
+    .padStart(8, '0')
+    .replace(/0+$/, '');
+
+  return fraction
+    ? `${whole}.${fraction}`
+    : whole.toString();
 }
 
 /**
@@ -95,9 +110,27 @@ export default function SendReviewScreen() {
   // only on the very first render of this screen instance, never again,
   // so re-renders (e.g. from this component's own state changes) can never
   // consume a second time.
-  const [pending] = useState(
-    () => consumePendingEthereumSend(),
-  );
+  const [pending] = useState(() => {
+    const ethereum = consumePendingEthereumSend();
+
+    if (ethereum) {
+      return {
+        chain: 'ethereum' as const,
+        pending: ethereum,
+      };
+    }
+
+    const bitcoin = consumePendingBitcoinSend();
+
+    if (bitcoin) {
+      return {
+        chain: 'bitcoin' as const,
+        pending: bitcoin,
+      };
+    }
+
+    return null;
+  });
   const [confirmState, setConfirmState] = useState<ConfirmState>({ status: 'ready' });
   // Single-flight guard against a duplicate concurrent confirm — e.g. a
   // fast double-tap before the first attempt's promise has settled. Mirrors
@@ -157,14 +190,43 @@ export default function SendReviewScreen() {
     if (!pending || isConfirmingRef.current) {
       return;
     }
+
     isConfirmingRef.current = true;
     setConfirmState({ status: 'signing' });
 
+    if (pending.chain === 'bitcoin') {
+      try {
+        setConfirmState({ status: 'broadcasting' });
+
+        const result = await executeBitcoinV1Send(
+          pending.pending.intent,
+        );
+
+        isConfirmingRef.current = false;
+
+        setConfirmState({
+          status: 'pending',
+          txHash: result.broadcast.txid as EthereumTxHash,
+        });
+      } catch {
+        isConfirmingRef.current = false;
+
+        setConfirmState({
+          status: 'error',
+          reason: 'auth_or_signing_failed',
+        });
+      }
+
+      return;
+    }
+
+    const ethereumPending = pending.pending;
+
     try {
       const txHash =
-        pending.kind === 'native'
+        ethereumPending.kind === 'native'
           ? await confirmAndSendEthereumV1(
-              pending.prepared,
+              ethereumPending.prepared,
               {
                 onPhaseChange: (phase) =>
                   setConfirmState({
@@ -174,7 +236,7 @@ export default function SendReviewScreen() {
             )
           : await confirmEthereumTransactionV1(
               toEthereumErc20SendIntent(
-                pending.prepared,
+                ethereumPending.prepared,
               ),
               {
                 onPhaseChange: (phase) =>
@@ -183,39 +245,45 @@ export default function SendReviewScreen() {
                   }),
               },
             );
+
       isConfirmingRef.current = false;
-      // Broadcast accepted: show "Transaction sent" / pending immediately —
-      // never block the UI waiting for mining. No automatic lookup here;
-      // `'accepted'` is already a definitive positive signal, unlike the
-      // ambiguous case below.
+
       setConfirmState({ status: 'pending', txHash });
     } catch (error) {
       isConfirmingRef.current = false;
 
       if (error instanceof EthereumSendConfirmationError) {
         if (error.reason === 'broadcast_rejected') {
-          // Definite rejection — no lookup offered (the transaction never
-          // reached a mempool, so a lookup would only ever return
-          // 'not_found', which would misleadingly read as "uncertain"). No
-          // automatic new nonce, no re-sign — the user must explicitly
-          // start a fresh Send.
-          setConfirmState({ status: 'failed', txHash: null });
+          setConfirmState({
+            status: 'failed',
+            txHash: null,
+          });
           return;
         }
+
         if (
-          (error.reason === 'broadcast_ambiguous' || error.reason === 'hash_mismatch') &&
+          (
+            error.reason === 'broadcast_ambiguous' ||
+            error.reason === 'hash_mismatch'
+          ) &&
           error.signerTxHash
         ) {
-          // Never re-sign, never broadcast new bytes — resolve using the
-          // already-known locally-computed hash only.
-          await resolveStatus(error.signerTxHash);
+          await resolveStatus(
+            error.signerTxHash,
+          );
           return;
         }
       }
 
       const reason =
-        error instanceof EthereumSendConfirmationError ? error.reason : 'hash_mismatch';
-      setConfirmState({ status: 'error', reason });
+        error instanceof EthereumSendConfirmationError
+          ? error.reason
+          : 'hash_mismatch';
+
+      setConfirmState({
+        status: 'error',
+        reason,
+      });
     }
   }, [pending, resolveStatus]);
 
@@ -253,21 +321,32 @@ export default function SendReviewScreen() {
     );
   }
 
-  const prepared = pending.prepared;
-  const isErc20 = pending.kind === 'erc20';
+  const isBitcoin =
+    pending.chain === 'bitcoin';
 
-  const displaySymbol =
-    isErc20
-      ? prepared.symbol === 'XAUT'
+  const ethereumPrepared =
+    pending.chain === 'ethereum'
+      ? pending.pending.prepared
+      : null;
+
+  const isErc20 =
+    pending.chain === 'ethereum' &&
+    pending.pending.kind === 'erc20';
+
+  const displaySymbol = isBitcoin
+    ? 'BTC'
+    : isErc20 && ethereumPrepared
+      ? ethereumPrepared.symbol === 'XAUT'
         ? 'XAU₮'
-        : prepared.symbol
+        : ethereumPrepared.symbol
       : 'ETH';
 
-  const displayName =
-    isErc20
-      ? prepared.symbol === 'USDC'
+  const displayName = isBitcoin
+    ? 'Bitcoin'
+    : isErc20 && ethereumPrepared
+      ? ethereumPrepared.symbol === 'USDC'
         ? 'USD Coin'
-        : prepared.symbol === 'USDT'
+        : ethereumPrepared.symbol === 'USDT'
           ? 'Tether'
           : 'Tether Gold'
       : 'Ethereum';
@@ -290,7 +369,13 @@ export default function SendReviewScreen() {
     <ScreenScaffold header={<ScreenHeader title="Review" back={!isBusy} />}>
       <View style={styles.assetRow}>
         <CoinBadge
-          symbol={isErc20 ? prepared.symbol : 'ETH'}
+          symbol={
+            isBitcoin
+              ? 'BTC'
+              : isErc20 && ethereumPrepared
+                ? ethereumPrepared.symbol
+                : 'ETH'
+          }
           size={28}
         />
         <View>
@@ -306,36 +391,58 @@ export default function SendReviewScreen() {
       <View style={styles.card}>
         <ReviewRow
           label="Recipient"
-          value={prepared.recipient}
+          value={
+            isBitcoin
+              ? pending.pending.recipient
+              : ethereumPrepared!.recipient
+          }
           mono
         />
 
         <ReviewRow
           label="Amount"
           value={
-            isErc20
-              ? `${formatAtomicTokenAmount(
-                  prepared.amountAtomic,
-                  prepared.tokenDecimals,
-                )} ${displaySymbol}`
-              : `${formatWeiAsEthDecimalString(
-                  prepared.amountWei,
-                )} ETH`
+            isBitcoin
+              ? `${formatSatsAsBtc(
+                  pending.pending.amountSat,
+                )} BTC`
+              : isErc20 && ethereumPrepared
+                ? `${formatAtomicTokenAmount(
+                    ethereumPrepared.amountAtomic,
+                    ethereumPrepared.tokenDecimals,
+                  )} ${displaySymbol}`
+                : `${formatWeiAsEthDecimalString(
+                    ethereumPrepared!.amountWei,
+                  )} ETH`
           }
         />
 
         <ReviewRow
           label="Maximum network fee"
-          value={`${formatWeiAsEthDecimalString(
-            prepared.maxFeeWei,
-          )} ETH`}
+          value={
+            isBitcoin
+              ? `${formatSatsAsBtc(
+                  pending.pending.feeSat,
+                )} BTC`
+              : `${formatWeiAsEthDecimalString(
+                  ethereumPrepared!.maxFeeWei,
+                )} ETH`
+          }
         />
 
-        {!isErc20 ? (
+        {isBitcoin ? (
+          <ReviewRow
+            label="Total debit"
+            value={`${formatSatsAsBtc(
+              pending.pending.totalDebitSat,
+            )} BTC`}
+            emphasized
+          />
+        ) : !isErc20 && ethereumPrepared ? (
           <ReviewRow
             label="Maximum total debit"
             value={`${formatWeiAsEthDecimalString(
-              prepared.totalMaxDebitWei,
+              ethereumPrepared.totalMaxDebitWei,
             )} ETH`}
             emphasized
           />
@@ -343,7 +450,11 @@ export default function SendReviewScreen() {
 
         <ReviewRow
           label="Network"
-          value="Ethereum Mainnet"
+          value={
+            isBitcoin
+              ? 'Bitcoin Mainnet'
+              : 'Ethereum Mainnet'
+          }
           last
         />
       </View>

@@ -13,11 +13,18 @@
 import { toEthereumAddress, type EthereumAddress } from 'chain-domain';
 
 import type {
+  BitcoinV1SignedTransaction,
+  BitcoinV1TransactionIntent,
   EthereumV1SignedTransaction,
   EthereumV1TransactionIntent,
 } from '../../modules/wallet-core-bridge/src/WalletCoreBridge.types';
 
-export type { EthereumV1SignedTransaction, EthereumV1TransactionIntent };
+export type {
+  BitcoinV1SignedTransaction,
+  BitcoinV1TransactionIntent,
+  EthereumV1SignedTransaction,
+  EthereumV1TransactionIntent,
+};
 
 type WalletCoreBridgeApi = {
   hasWallet(): boolean;
@@ -30,6 +37,9 @@ type WalletCoreBridgeApi = {
   requestRevealBackup(): Promise<void>;
   requestAppUnlock(): Promise<void>;
   signEthereumTransactionV1(intent: EthereumV1TransactionIntent): Promise<EthereumV1SignedTransaction>;
+  signBitcoinTransactionV1(
+    intent: BitcoinV1TransactionIntent,
+  ): Promise<BitcoinV1SignedTransaction>;
 };
 
 /**
@@ -260,4 +270,35 @@ export function signEthereumTransactionV1(
     return Promise.reject(new Error('Native Wallet Core module unavailable in this runtime.'));
   }
   return bridge.signEthereumTransactionV1(intent);
+}
+
+
+/**
+ * Production Bitcoin V1 transaction signing bridge.
+ *
+ * Intent fields are PUBLIC transaction data only. Satoshi values cross
+ * the JS/native boundary as decimal strings so JavaScript cannot silently
+ * round them.
+ *
+ * Native performs fresh device-owner authentication before reading
+ * secure wallet storage. Entropy, mnemonic, seed, private key, xpriv,
+ * arbitrary derivation path, precomputed sighash and witness data never
+ * cross into React Native.
+ *
+ * Signing only — no broadcast occurs here.
+ */
+export function signBitcoinTransactionV1(
+  intent: BitcoinV1TransactionIntent,
+): Promise<BitcoinV1SignedTransaction> {
+  const bridge = loadWalletCoreBridge();
+
+  if (!bridge) {
+    return Promise.reject(
+      new Error(
+        'Native Wallet Core module unavailable in this runtime.',
+      ),
+    );
+  }
+
+  return bridge.signBitcoinTransactionV1(intent);
 }

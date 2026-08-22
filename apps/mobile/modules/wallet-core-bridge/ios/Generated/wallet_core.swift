@@ -465,6 +465,22 @@ fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
+    typealias FfiType = UInt32
+    typealias SwiftType = UInt32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
     typealias FfiType = UInt64
     typealias SwiftType = UInt64
@@ -755,6 +771,144 @@ public func FfiConverterTypeFfiCreateWalletSecretSession_lower(_ value: FfiCreat
 
 
 /**
+ * PUBLIC-SAFE input shape for Bitcoin V1 signing.
+ *
+ * Contains only public transaction data. No seed, mnemonic, entropy,
+ * private key, xpriv, arbitrary derivation path, or precomputed sighash
+ * can cross this record.
+ */
+public struct FfiBitcoinV1Input: Equatable, Hashable {
+    public var txid: String
+    public var vout: UInt32
+    public var valueSat: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(txid: String, vout: UInt32, valueSat: UInt64) {
+        self.txid = txid
+        self.vout = vout
+        self.valueSat = valueSat
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiBitcoinV1Input: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiBitcoinV1Input: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiBitcoinV1Input {
+        return
+            try FfiBitcoinV1Input(
+                txid: FfiConverterString.read(from: &buf), 
+                vout: FfiConverterUInt32.read(from: &buf), 
+                valueSat: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiBitcoinV1Input, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.txid, into: &buf)
+        FfiConverterUInt32.write(value.vout, into: &buf)
+        FfiConverterUInt64.write(value.valueSat, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiBitcoinV1Input_lift(_ buf: RustBuffer) throws -> FfiBitcoinV1Input {
+    return try FfiConverterTypeFfiBitcoinV1Input.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiBitcoinV1Input_lower(_ value: FfiBitcoinV1Input) -> RustBuffer {
+    return FfiConverterTypeFfiBitcoinV1Input.lower(value)
+}
+
+
+/**
+ * PUBLIC-SAFE Bitcoin V1 transaction intent.
+ *
+ * V1 signs only the wallet's fixed BIP-84 receive key internally.
+ * `change_address` is public transaction data and is validated by the
+ * Rust signer as Bitcoin mainnet.
+ */
+public struct FfiBitcoinV1TransactionIntent: Equatable, Hashable {
+    public var inputs: [FfiBitcoinV1Input]
+    public var destinationAddress: String
+    public var amountSat: UInt64
+    public var changeAddress: String?
+    public var changeSat: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(inputs: [FfiBitcoinV1Input], destinationAddress: String, amountSat: UInt64, changeAddress: String?, changeSat: UInt64) {
+        self.inputs = inputs
+        self.destinationAddress = destinationAddress
+        self.amountSat = amountSat
+        self.changeAddress = changeAddress
+        self.changeSat = changeSat
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiBitcoinV1TransactionIntent: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiBitcoinV1TransactionIntent: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiBitcoinV1TransactionIntent {
+        return
+            try FfiBitcoinV1TransactionIntent(
+                inputs: FfiConverterSequenceTypeFfiBitcoinV1Input.read(from: &buf), 
+                destinationAddress: FfiConverterString.read(from: &buf), 
+                amountSat: FfiConverterUInt64.read(from: &buf), 
+                changeAddress: FfiConverterOptionString.read(from: &buf), 
+                changeSat: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiBitcoinV1TransactionIntent, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeFfiBitcoinV1Input.write(value.inputs, into: &buf)
+        FfiConverterString.write(value.destinationAddress, into: &buf)
+        FfiConverterUInt64.write(value.amountSat, into: &buf)
+        FfiConverterOptionString.write(value.changeAddress, into: &buf)
+        FfiConverterUInt64.write(value.changeSat, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiBitcoinV1TransactionIntent_lift(_ buf: RustBuffer) throws -> FfiBitcoinV1TransactionIntent {
+    return try FfiConverterTypeFfiBitcoinV1TransactionIntent.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiBitcoinV1TransactionIntent_lower(_ value: FfiBitcoinV1TransactionIntent) -> RustBuffer {
+    return FfiConverterTypeFfiBitcoinV1TransactionIntent.lower(value)
+}
+
+
+/**
  * PUBLIC-SAFE (input/output shape only — this record carries no secret
  * field). Structured, public V1 Ethereum EIP-1559 transaction intent —
  * see `signing::EthereumV1TransactionIntent`'s own doc comment for why
@@ -838,6 +992,63 @@ public func FfiConverterTypeFfiEthereumV1TransactionIntent_lift(_ buf: RustBuffe
 #endif
 public func FfiConverterTypeFfiEthereumV1TransactionIntent_lower(_ value: FfiEthereumV1TransactionIntent) -> RustBuffer {
     return FfiConverterTypeFfiEthereumV1TransactionIntent.lower(value)
+}
+
+
+/**
+ * PUBLIC-SAFE Bitcoin signing result. Safe to forward to React Native.
+ */
+public struct FfiSignedBitcoinV1Transaction: Equatable, Hashable {
+    public var signedTxHex: String
+    public var txid: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(signedTxHex: String, txid: String) {
+        self.signedTxHex = signedTxHex
+        self.txid = txid
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiSignedBitcoinV1Transaction: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiSignedBitcoinV1Transaction: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSignedBitcoinV1Transaction {
+        return
+            try FfiSignedBitcoinV1Transaction(
+                signedTxHex: FfiConverterString.read(from: &buf), 
+                txid: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiSignedBitcoinV1Transaction, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.signedTxHex, into: &buf)
+        FfiConverterString.write(value.txid, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSignedBitcoinV1Transaction_lift(_ buf: RustBuffer) throws -> FfiSignedBitcoinV1Transaction {
+    return try FfiConverterTypeFfiSignedBitcoinV1Transaction.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSignedBitcoinV1Transaction_lower(_ value: FfiSignedBitcoinV1Transaction) -> RustBuffer {
+    return FfiConverterTypeFfiSignedBitcoinV1Transaction.lower(value)
 }
 
 
@@ -960,6 +1171,114 @@ public func FfiConverterTypeFfiV1WalletAddresses_lift(_ buf: RustBuffer) throws 
 #endif
 public func FfiConverterTypeFfiV1WalletAddresses_lower(_ value: FfiV1WalletAddresses) -> RustBuffer {
     return FfiConverterTypeFfiV1WalletAddresses.lower(value)
+}
+
+
+/**
+ * Structural, non-secret Bitcoin signing errors.
+ *
+ * Mirrors `bitcoin_signing::BitcoinSigningError`. No String payload,
+ * secret material, provider detail, or cryptographic error detail crosses
+ * the UniFFI boundary.
+ */
+public 
+enum FfiBitcoinSigningError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+    
+    
+    case InvalidDestinationAddress
+    case InvalidChangeAddress
+    case InvalidTxid
+    case InvalidAmount
+    case EmptyInputs
+    case SigningFailed
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
+}
+
+#if compiler(>=6)
+extension FfiBitcoinSigningError: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiBitcoinSigningError: FfiConverterRustBuffer {
+    typealias SwiftType = FfiBitcoinSigningError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiBitcoinSigningError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .InvalidDestinationAddress
+        case 2: return .InvalidChangeAddress
+        case 3: return .InvalidTxid
+        case 4: return .InvalidAmount
+        case 5: return .EmptyInputs
+        case 6: return .SigningFailed
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiBitcoinSigningError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case .InvalidDestinationAddress:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .InvalidChangeAddress:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .InvalidTxid:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .InvalidAmount:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .EmptyInputs:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .SigningFailed:
+            writeInt(&buf, Int32(6))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiBitcoinSigningError_lift(_ buf: RustBuffer) throws -> FfiBitcoinSigningError {
+    return try FfiConverterTypeFfiBitcoinSigningError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiBitcoinSigningError_lower(_ value: FfiBitcoinSigningError) -> RustBuffer {
+    return FfiConverterTypeFfiBitcoinSigningError.lower(value)
 }
 
 
@@ -1160,6 +1479,55 @@ public func FfiConverterTypeFfiWalletError_lift(_ buf: RustBuffer) throws -> Ffi
 public func FfiConverterTypeFfiWalletError_lower(_ value: FfiWalletError) -> RustBuffer {
     return FfiConverterTypeFfiWalletError.lower(value)
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
+    typealias SwiftType = String?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterString.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiBitcoinV1Input: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiBitcoinV1Input]
+
+    public static func write(_ value: [FfiBitcoinV1Input], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiBitcoinV1Input.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiBitcoinV1Input] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiBitcoinV1Input]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiBitcoinV1Input.read(from: &buf))
+        }
+        return seq
+    }
+}
 /**
  * Returns a deterministic health-check response.
  *
@@ -1223,6 +1591,27 @@ public func dangerousNativeOnlyMnemonicFromEntropyV1(entropy: Data)throws  -> St
         uniffiCallStatus in
     uniffi_wallet_core_fn_func_dangerous_native_only_mnemonic_from_entropy_v1(
         FfiConverterData.lower(entropy),uniffiCallStatus
+    )
+})
+}
+/**
+ * NATIVE-ONLY DANGEROUS Bitcoin V1 signing entry point.
+ *
+ * The native caller must perform fresh device-owner authentication
+ * immediately before reading canonical entropy and calling this function.
+ *
+ * Entropy enters Rust only from native secure storage. Rust reconstructs
+ * the wallet seed and derives the fixed Bitcoin V1 receive signing key
+ * internally. No private key, seed, mnemonic, xpriv or sighash is returned.
+ *
+ * This function signs only. It NEVER broadcasts.
+ */
+public func dangerousNativeOnlySignBitcoinTransactionV1(entropy: Data, intent: FfiBitcoinV1TransactionIntent)throws  -> FfiSignedBitcoinV1Transaction  {
+    return try  FfiConverterTypeFfiSignedBitcoinV1Transaction_lift(try rustCallWithError(FfiConverterTypeFfiBitcoinSigningError_lift) {
+        uniffiCallStatus in
+    uniffi_wallet_core_fn_func_dangerous_native_only_sign_bitcoin_transaction_v1(
+        FfiConverterData.lower(entropy),
+        FfiConverterTypeFfiBitcoinV1TransactionIntent_lower(intent),uniffiCallStatus
     )
 })
 }
@@ -1342,6 +1731,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallet_core_checksum_func_dangerous_native_only_mnemonic_from_entropy_v1() != 58891) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_wallet_core_checksum_func_dangerous_native_only_sign_bitcoin_transaction_v1() != 5814) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_wallet_core_checksum_func_dangerous_native_only_sign_ethereum_transaction_v1() != 58861) {

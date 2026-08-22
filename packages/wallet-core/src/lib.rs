@@ -1200,6 +1200,40 @@ mod signing {
 /// entropy and the mnemonic sentence cross here, and only through the two
 /// explicitly named dangerous accessors below.
 mod ffi {
+
+    /// PUBLIC-SAFE input shape for Bitcoin V1 signing.
+    ///
+    /// Contains only public transaction data. No seed, mnemonic, entropy,
+    /// private key, xpriv, arbitrary derivation path, or precomputed sighash
+    /// can cross this record.
+    #[derive(Debug, Clone, uniffi::Record)]
+    pub struct FfiBitcoinV1Input {
+        pub txid: String,
+        pub vout: u32,
+        pub value_sat: u64,
+    }
+
+    /// PUBLIC-SAFE Bitcoin V1 transaction intent.
+    ///
+    /// V1 signs only the wallet's fixed BIP-84 receive key internally.
+    /// `change_address` is public transaction data and is validated by the
+    /// Rust signer as Bitcoin mainnet.
+    #[derive(Debug, Clone, uniffi::Record)]
+    pub struct FfiBitcoinV1TransactionIntent {
+        pub inputs: Vec<FfiBitcoinV1Input>,
+        pub destination_address: String,
+        pub amount_sat: u64,
+        pub change_address: Option<String>,
+        pub change_sat: u64,
+    }
+
+    /// PUBLIC-SAFE Bitcoin signing result. Safe to forward to React Native.
+    #[derive(Debug, Clone, uniffi::Record)]
+    pub struct FfiSignedBitcoinV1Transaction {
+        pub signed_tx_hex: String,
+        pub txid: String,
+    }
+
     use super::derivation;
     use super::signing;
     use super::wallet_secret;
@@ -1545,6 +1579,96 @@ mod ffi {
         result
             .map(FfiSignedEthereumV1Transaction::from)
             .map_err(FfiEthereumSigningError::from)
+    }
+
+    /// Structural, non-secret Bitcoin signing errors.
+    ///
+    /// Mirrors `bitcoin_signing::BitcoinSigningError`. No String payload,
+    /// secret material, provider detail, or cryptographic error detail crosses
+    /// the UniFFI boundary.
+    #[derive(uniffi::Error, Debug, PartialEq, Eq)]
+    pub enum FfiBitcoinSigningError {
+        InvalidDestinationAddress,
+        InvalidChangeAddress,
+        InvalidTxid,
+        InvalidAmount,
+        EmptyInputs,
+        SigningFailed,
+    }
+
+    impl std::fmt::Display for FfiBitcoinSigningError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{self:?}")
+        }
+    }
+
+    impl From<crate::bitcoin_signing::BitcoinSigningError> for FfiBitcoinSigningError {
+        fn from(error: crate::bitcoin_signing::BitcoinSigningError) -> Self {
+            match error {
+                crate::bitcoin_signing::BitcoinSigningError::InvalidDestinationAddress => {
+                    Self::InvalidDestinationAddress
+                }
+                crate::bitcoin_signing::BitcoinSigningError::InvalidChangeAddress => {
+                    Self::InvalidChangeAddress
+                }
+                crate::bitcoin_signing::BitcoinSigningError::InvalidTxid => Self::InvalidTxid,
+                crate::bitcoin_signing::BitcoinSigningError::InvalidAmount => Self::InvalidAmount,
+                crate::bitcoin_signing::BitcoinSigningError::EmptyInputs => Self::EmptyInputs,
+                crate::bitcoin_signing::BitcoinSigningError::SigningFailed => Self::SigningFailed,
+            }
+        }
+    }
+    /// NATIVE-ONLY DANGEROUS Bitcoin V1 signing entry point.
+    ///
+    /// The native caller must perform fresh device-owner authentication
+    /// immediately before reading canonical entropy and calling this function.
+    ///
+    /// Entropy enters Rust only from native secure storage. Rust reconstructs
+    /// the wallet seed and derives the fixed Bitcoin V1 receive signing key
+    /// internally. No private key, seed, mnemonic, xpriv or sighash is returned.
+    ///
+    /// This function signs only. It NEVER broadcasts.
+    #[uniffi::export]
+    pub fn dangerous_native_only_sign_bitcoin_transaction_v1(
+        mut entropy: Vec<u8>,
+        intent: FfiBitcoinV1TransactionIntent,
+    ) -> Result<FfiSignedBitcoinV1Transaction, FfiBitcoinSigningError> {
+        let result = (|| {
+            let mnemonic = wallet_secret::mnemonic_from_canonical_entropy_v1(&entropy)
+                .map_err(|_| FfiBitcoinSigningError::SigningFailed)?;
+
+            let seed = wallet_secret::seed_from_mnemonic(&mnemonic, "");
+
+            let internal_intent = crate::bitcoin_signing::BitcoinV1TransactionIntent {
+                inputs: intent
+                    .inputs
+                    .into_iter()
+                    .map(|input| crate::bitcoin_signing::BitcoinV1Input {
+                        txid: input.txid,
+                        vout: input.vout,
+                        value_sat: input.value_sat,
+                    })
+                    .collect(),
+                destination_address: intent.destination_address,
+                amount_sat: intent.amount_sat,
+                change_address: intent.change_address,
+                change_sat: intent.change_sat,
+            };
+
+            let signed = crate::bitcoin_signing::sign_bitcoin_v1_transaction(
+                seed.as_slice(),
+                &internal_intent,
+            )
+            .map_err(FfiBitcoinSigningError::from)?;
+
+            Ok(FfiSignedBitcoinV1Transaction {
+                signed_tx_hex: signed.signed_tx_hex,
+                txid: signed.txid,
+            })
+        })();
+
+        entropy.fill(0);
+        result
     }
 }
 
@@ -2821,6 +2945,138 @@ mod tests {
                 max_priority_fee_per_gas_wei_decimal: _,
                 data_hex: _,
             } = reference_ffi_intent();
+        }
+    }
+
+    mod ffi_bitcoin_signing {
+        use super::super::bitcoin_signing::BitcoinSigningError;
+        use super::super::ffi::{
+            FfiBitcoinSigningError, FfiBitcoinV1Input, FfiBitcoinV1TransactionIntent,
+            dangerous_native_only_sign_bitcoin_transaction_v1,
+        };
+
+        const ZERO_ENTROPY: [u8; 16] = [0u8; 16];
+
+        const DESTINATION: &str = "bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el";
+
+        const CHANGE: &str = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
+
+        fn reference_intent() -> FfiBitcoinV1TransactionIntent {
+            FfiBitcoinV1TransactionIntent {
+                inputs: vec![FfiBitcoinV1Input {
+                    txid: "11".repeat(32),
+                    vout: 0,
+                    value_sat: 100_000,
+                }],
+                destination_address: DESTINATION.to_string(),
+                amount_sat: 50_000,
+                change_address: Some(CHANGE.to_string()),
+                change_sat: 49_000,
+            }
+        }
+
+        #[test]
+        fn valid_entropy_and_intent_produce_signed_bitcoin_transaction() {
+            let result = dangerous_native_only_sign_bitcoin_transaction_v1(
+                ZERO_ENTROPY.to_vec(),
+                reference_intent(),
+            )
+            .expect("valid BTC intent should sign");
+
+            assert!(!result.signed_tx_hex.is_empty());
+            assert_eq!(result.txid.len(), 64);
+            assert!(result.txid.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        }
+
+        #[test]
+        fn signing_is_deterministic_for_same_entropy_and_intent() {
+            let first = dangerous_native_only_sign_bitcoin_transaction_v1(
+                ZERO_ENTROPY.to_vec(),
+                reference_intent(),
+            )
+            .expect("first signing succeeds");
+
+            let second = dangerous_native_only_sign_bitcoin_transaction_v1(
+                ZERO_ENTROPY.to_vec(),
+                reference_intent(),
+            )
+            .expect("second signing succeeds");
+
+            assert_eq!(first.signed_tx_hex, second.signed_tx_hex);
+
+            assert_eq!(first.txid, second.txid);
+        }
+
+        #[test]
+        fn malformed_intent_is_structurally_rejected() {
+            let mut intent = reference_intent();
+            intent.destination_address = "not-a-bitcoin-address".to_string();
+
+            let result =
+                dangerous_native_only_sign_bitcoin_transaction_v1(ZERO_ENTROPY.to_vec(), intent);
+
+            assert!(matches!(
+                result,
+                Err(FfiBitcoinSigningError::InvalidDestinationAddress)
+            ));
+        }
+
+        #[test]
+        fn invalid_entropy_length_is_generic_signing_failure() {
+            let result =
+                dangerous_native_only_sign_bitcoin_transaction_v1(vec![0u8; 3], reference_intent());
+
+            assert!(matches!(result, Err(FfiBitcoinSigningError::SigningFailed)));
+        }
+
+        #[test]
+        fn error_enum_maps_structurally() {
+            assert_eq!(
+                FfiBitcoinSigningError::from(BitcoinSigningError::InvalidDestinationAddress),
+                FfiBitcoinSigningError::InvalidDestinationAddress
+            );
+
+            assert_eq!(
+                FfiBitcoinSigningError::from(BitcoinSigningError::InvalidChangeAddress),
+                FfiBitcoinSigningError::InvalidChangeAddress
+            );
+
+            assert_eq!(
+                FfiBitcoinSigningError::from(BitcoinSigningError::InvalidTxid),
+                FfiBitcoinSigningError::InvalidTxid
+            );
+
+            assert_eq!(
+                FfiBitcoinSigningError::from(BitcoinSigningError::InvalidAmount),
+                FfiBitcoinSigningError::InvalidAmount
+            );
+
+            assert_eq!(
+                FfiBitcoinSigningError::from(BitcoinSigningError::EmptyInputs),
+                FfiBitcoinSigningError::EmptyInputs
+            );
+
+            assert_eq!(
+                FfiBitcoinSigningError::from(BitcoinSigningError::SigningFailed),
+                FfiBitcoinSigningError::SigningFailed
+            );
+        }
+
+        #[test]
+        fn ffi_intent_shape_contains_only_public_transaction_fields() {
+            let FfiBitcoinV1TransactionIntent {
+                inputs,
+                destination_address: _,
+                amount_sat: _,
+                change_address: _,
+                change_sat: _,
+            } = reference_intent();
+
+            let FfiBitcoinV1Input {
+                txid: _,
+                vout: _,
+                value_sat: _,
+            } = &inputs[0];
         }
     }
 }
