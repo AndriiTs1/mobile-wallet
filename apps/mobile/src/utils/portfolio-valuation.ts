@@ -17,9 +17,8 @@ function toMarketSymbol(
     case 'ETH':
     case 'USDC':
     case 'USDT':
-      return symbol;
     case 'XAUT':
-      return null;
+      return symbol;
   }
 }
 

@@ -1,6 +1,6 @@
 const COINGECKO_SIMPLE_PRICE_URL = 'https://api.coingecko.com/api/v3/simple/price';
 
-export type MarketSymbol = 'BTC' | 'ETH' | 'USDC' | 'USDT';
+export type MarketSymbol = 'BTC' | 'ETH' | 'USDC' | 'USDT' | 'XAUT';
 
 export type MarketPrice = {
   priceChf: number;
@@ -14,6 +14,7 @@ const COINGECKO_IDS: Record<MarketSymbol, string> = {
   ETH: 'ethereum',
   USDC: 'usd-coin',
   USDT: 'tether',
+  XAUT: 'tether-gold',
 };
 
 export async function fetchMarketPrices(): Promise<MarketPrices> {
