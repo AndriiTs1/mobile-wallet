@@ -398,6 +398,473 @@ mod wallet_secret {
     }
 }
 
+/// Bitcoin V1 BIP-84 P2WPKH transaction signing.
+///
+/// Rust-internal only. The caller supplies public transaction data only:
+/// destination, selected UTXOs, amounts and fee-derived outputs.
+///
+/// Security invariants:
+/// - fixed Bitcoin mainnet only
+/// - fixed BIP-84 receive key: m/84'/0'/0'/0/0
+/// - no caller-supplied derivation path
+/// - no caller-supplied signing hash
+/// - no seed/private key/xpriv crosses this module boundary
+/// - no network access
+/// - no broadcast
+#[allow(dead_code)]
+mod bitcoin_signing {
+    use super::derivation::{V1DerivationPath, derive_v1};
+    use bitcoin::absolute;
+    use bitcoin::consensus::encode::serialize_hex;
+    use bitcoin::sighash::{EcdsaSighashType, SighashCache};
+    use bitcoin::{
+        Address, Amount, CompressedPublicKey, Network, OutPoint, ScriptBuf, Sequence, Transaction,
+        TxIn, TxOut, Txid, Witness, transaction,
+    };
+    use std::str::FromStr;
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub(crate) enum BitcoinSigningError {
+        InvalidDestinationAddress,
+        InvalidChangeAddress,
+        InvalidTxid,
+        InvalidAmount,
+        EmptyInputs,
+        SigningFailed,
+    }
+
+    #[derive(Debug, Clone)]
+    pub(crate) struct BitcoinV1Input {
+        pub txid: String,
+        pub vout: u32,
+        pub value_sat: u64,
+    }
+
+    #[derive(Debug, Clone)]
+    pub(crate) struct BitcoinV1TransactionIntent {
+        pub destination_address: String,
+        pub amount_sat: u64,
+        pub change_address: Option<String>,
+        pub change_sat: u64,
+        pub inputs: Vec<BitcoinV1Input>,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub(crate) struct SignedBitcoinV1Transaction {
+        pub signed_tx_hex: String,
+        pub txid: String,
+    }
+
+    pub(crate) fn sign_bitcoin_v1_transaction(
+        seed: &[u8],
+        intent: &BitcoinV1TransactionIntent,
+    ) -> Result<SignedBitcoinV1Transaction, BitcoinSigningError> {
+        if intent.inputs.is_empty() {
+            return Err(BitcoinSigningError::EmptyInputs);
+        }
+
+        if intent.amount_sat == 0 {
+            return Err(BitcoinSigningError::InvalidAmount);
+        }
+
+        let destination = Address::from_str(&intent.destination_address)
+            .map_err(|_| BitcoinSigningError::InvalidDestinationAddress)?
+            .require_network(Network::Bitcoin)
+            .map_err(|_| BitcoinSigningError::InvalidDestinationAddress)?;
+
+        let change = match (&intent.change_address, intent.change_sat) {
+            (Some(address), amount) if amount > 0 => Some((
+                Address::from_str(address)
+                    .map_err(|_| BitcoinSigningError::InvalidChangeAddress)?
+                    .require_network(Network::Bitcoin)
+                    .map_err(|_| BitcoinSigningError::InvalidChangeAddress)?,
+                amount,
+            )),
+            (None, 0) => None,
+            _ => return Err(BitcoinSigningError::InvalidAmount),
+        };
+
+        let total_input = intent.inputs.iter().try_fold(0u64, |sum, input| {
+            if input.value_sat == 0 {
+                return Err(BitcoinSigningError::InvalidAmount);
+            }
+            sum.checked_add(input.value_sat)
+                .ok_or(BitcoinSigningError::InvalidAmount)
+        })?;
+
+        let total_output = intent
+            .amount_sat
+            .checked_add(intent.change_sat)
+            .ok_or(BitcoinSigningError::InvalidAmount)?;
+
+        // A valid transaction must leave a strictly positive miner fee.
+        if total_output >= total_input {
+            return Err(BitcoinSigningError::InvalidAmount);
+        }
+
+        let mut tx_inputs = Vec::with_capacity(intent.inputs.len());
+
+        for input in &intent.inputs {
+            let txid = Txid::from_str(&input.txid).map_err(|_| BitcoinSigningError::InvalidTxid)?;
+
+            tx_inputs.push(TxIn {
+                previous_output: OutPoint::new(txid, input.vout),
+                script_sig: ScriptBuf::default(),
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                witness: Witness::default(),
+            });
+        }
+
+        let mut outputs = vec![TxOut {
+            value: Amount::from_sat(intent.amount_sat),
+            script_pubkey: destination.script_pubkey(),
+        }];
+
+        if let Some((change_address, change_amount)) = change {
+            outputs.push(TxOut {
+                value: Amount::from_sat(change_amount),
+                script_pubkey: change_address.script_pubkey(),
+            });
+        }
+
+        let mut tx = Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: tx_inputs,
+            output: outputs,
+        };
+
+        // V1 currently controls exactly one external BIP-84 receive key.
+        // Therefore every selected input must belong to that same receive key.
+        let mut xpriv = derive_v1(seed, V1DerivationPath::BitcoinReceiveV1);
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let mut private_key = xpriv.to_priv();
+
+        let compressed_public_key = CompressedPublicKey::from_private_key(&secp, &private_key)
+            .map_err(|_| BitcoinSigningError::SigningFailed)?;
+
+        let source_address = Address::p2wpkh(&compressed_public_key, Network::Bitcoin);
+        let source_script = source_address.script_pubkey();
+
+        for input_index in 0..intent.inputs.len() {
+            let input_value = Amount::from_sat(intent.inputs[input_index].value_sat);
+
+            let sighash = {
+                let mut cache = SighashCache::new(&mut tx);
+
+                cache
+                    .p2wpkh_signature_hash(
+                        input_index,
+                        &source_script,
+                        input_value,
+                        EcdsaSighashType::All,
+                    )
+                    .map_err(|_| BitcoinSigningError::SigningFailed)?
+            };
+
+            let message = bitcoin::secp256k1::Message::from(sighash);
+            let signature = secp.sign_ecdsa(&message, &private_key.inner);
+
+            let bitcoin_signature = bitcoin::ecdsa::Signature {
+                signature,
+                sighash_type: EcdsaSighashType::All,
+            };
+
+            let witness_public_key = private_key.inner.public_key(&secp);
+
+            tx.input[input_index].witness =
+                Witness::p2wpkh(&bitcoin_signature, &witness_public_key);
+        }
+
+        // Best-effort erase of the explicit key locations we own.
+        xpriv.private_key.non_secure_erase();
+        private_key.inner.non_secure_erase();
+
+        let txid = tx.compute_txid().to_string();
+        let signed_tx_hex = serialize_hex(&tx);
+
+        Ok(SignedBitcoinV1Transaction {
+            signed_tx_hex,
+            txid,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::derivation::{V1DerivationPath, derive_v1};
+        use bitcoin::consensus::deserialize;
+        use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, ecdsa::Signature};
+
+        const RECEIVE_ADDRESS: &str = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
+        const CHANGE_ADDRESS: &str = "bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el";
+
+        const TESTNET_ADDRESS: &str = "tb1qfm4au7km6kfrqz3p2zlps9urth2r7dc8grq6js";
+
+        fn seed() -> [u8; 64] {
+            use bip39::Mnemonic;
+            use std::str::FromStr;
+
+            Mnemonic::from_str(
+                "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            )
+            .expect("valid BIP-39 test mnemonic")
+            .to_seed("")
+        }
+
+        fn input(tx_byte: &str, vout: u32, value_sat: u64) -> BitcoinV1Input {
+            BitcoinV1Input {
+                txid: tx_byte.repeat(32),
+                vout,
+                value_sat,
+            }
+        }
+
+        fn reference_intent() -> BitcoinV1TransactionIntent {
+            BitcoinV1TransactionIntent {
+                destination_address: CHANGE_ADDRESS.to_string(),
+                amount_sat: 50_000,
+                change_address: Some(RECEIVE_ADDRESS.to_string()),
+                change_sat: 49_000,
+                inputs: vec![input("11", 0, 100_000)],
+            }
+        }
+
+        fn decode_hex(input: &str) -> Vec<u8> {
+            assert_eq!(input.len() % 2, 0);
+
+            (0..input.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&input[i..i + 2], 16).expect("valid hex"))
+                .collect()
+        }
+
+        #[test]
+        fn empty_inputs_are_rejected() {
+            let mut intent = reference_intent();
+            intent.inputs.clear();
+
+            assert_eq!(
+                sign_bitcoin_v1_transaction(&seed(), &intent),
+                Err(BitcoinSigningError::EmptyInputs)
+            );
+        }
+
+        #[test]
+        fn malformed_txid_is_rejected() {
+            let mut intent = reference_intent();
+            intent.inputs[0].txid = "not-a-txid".to_string();
+
+            assert_eq!(
+                sign_bitcoin_v1_transaction(&seed(), &intent),
+                Err(BitcoinSigningError::InvalidTxid)
+            );
+        }
+
+        #[test]
+        fn malformed_destination_is_rejected() {
+            let mut intent = reference_intent();
+            intent.destination_address = "not-a-bitcoin-address".to_string();
+
+            assert_eq!(
+                sign_bitcoin_v1_transaction(&seed(), &intent),
+                Err(BitcoinSigningError::InvalidDestinationAddress)
+            );
+        }
+
+        #[test]
+        fn testnet_destination_is_rejected() {
+            let mut intent = reference_intent();
+            intent.destination_address = TESTNET_ADDRESS.to_string();
+
+            assert_eq!(
+                sign_bitcoin_v1_transaction(&seed(), &intent),
+                Err(BitcoinSigningError::InvalidDestinationAddress)
+            );
+        }
+
+        #[test]
+        fn zero_amount_is_rejected() {
+            let mut intent = reference_intent();
+            intent.amount_sat = 0;
+
+            assert_eq!(
+                sign_bitcoin_v1_transaction(&seed(), &intent),
+                Err(BitcoinSigningError::InvalidAmount)
+            );
+        }
+
+        #[test]
+        fn outputs_equal_to_inputs_are_rejected_because_fee_must_be_positive() {
+            let mut intent = reference_intent();
+            intent.amount_sat = 51_000;
+            intent.change_sat = 49_000;
+
+            assert_eq!(
+                sign_bitcoin_v1_transaction(&seed(), &intent),
+                Err(BitcoinSigningError::InvalidAmount)
+            );
+        }
+
+        #[test]
+        fn signing_is_deterministic() {
+            let intent = reference_intent();
+
+            let first =
+                sign_bitcoin_v1_transaction(&seed(), &intent).expect("first signing succeeds");
+
+            let second =
+                sign_bitcoin_v1_transaction(&seed(), &intent).expect("second signing succeeds");
+
+            assert_eq!(first, second);
+        }
+
+        #[test]
+        fn signed_hex_decodes_and_txid_matches_independently() {
+            let signed = sign_bitcoin_v1_transaction(&seed(), &reference_intent())
+                .expect("signing succeeds");
+
+            let bytes = decode_hex(&signed.signed_tx_hex);
+
+            let tx: Transaction = deserialize(&bytes).expect("signed transaction decodes");
+
+            assert_eq!(tx.compute_txid().to_string(), signed.txid);
+
+            assert_eq!(tx.version, transaction::Version::TWO);
+            assert_eq!(tx.lock_time, absolute::LockTime::ZERO);
+            assert_eq!(tx.input.len(), 1);
+            assert_eq!(tx.output.len(), 2);
+        }
+
+        #[test]
+        fn p2wpkh_witness_has_signature_and_compressed_public_key() {
+            let signed = sign_bitcoin_v1_transaction(&seed(), &reference_intent())
+                .expect("signing succeeds");
+
+            let tx: Transaction =
+                deserialize(&decode_hex(&signed.signed_tx_hex)).expect("transaction decodes");
+
+            let txin = &tx.input[0];
+
+            assert!(txin.script_sig.is_empty());
+
+            let witness = txin.witness.to_vec();
+
+            assert_eq!(witness.len(), 2);
+
+            let signature = &witness[0];
+            let public_key = &witness[1];
+
+            assert!(
+                signature.len() > 1,
+                "signature must contain DER bytes + sighash byte"
+            );
+
+            assert_eq!(
+                *signature.last().expect("sighash byte"),
+                EcdsaSighashType::All.to_u32() as u8
+            );
+
+            assert_eq!(
+                public_key.len(),
+                33,
+                "BIP-84 V1 witness must carry a compressed pubkey"
+            );
+        }
+
+        #[test]
+        fn witness_signature_verifies_independently() {
+            let test_seed = seed();
+            let intent = reference_intent();
+
+            let signed =
+                sign_bitcoin_v1_transaction(&test_seed, &intent).expect("signing succeeds");
+
+            let tx: Transaction =
+                deserialize(&decode_hex(&signed.signed_tx_hex)).expect("transaction decodes");
+
+            let mut xpriv = derive_v1(&test_seed, V1DerivationPath::BitcoinReceiveV1);
+
+            let secp = Secp256k1::new();
+
+            let bitcoin_private_key = xpriv.to_priv();
+
+            let expected_compressed =
+                CompressedPublicKey::from_private_key(&secp, &bitcoin_private_key)
+                    .expect("compressed public key");
+
+            let expected_script =
+                Address::p2wpkh(&expected_compressed, Network::Bitcoin).script_pubkey();
+
+            let witness = tx.input[0].witness.to_vec();
+
+            let signature_bytes = &witness[0];
+            let der = &signature_bytes[..signature_bytes.len() - 1];
+
+            let signature = Signature::from_der(der).expect("valid DER signature");
+
+            let witness_public_key =
+                PublicKey::from_slice(&witness[1]).expect("valid compressed public key");
+
+            assert_eq!(
+                witness_public_key,
+                bitcoin_private_key.inner.public_key(&secp),
+            );
+
+            let mut cache = SighashCache::new(&tx);
+
+            let sighash = cache
+                .p2wpkh_signature_hash(
+                    0,
+                    &expected_script,
+                    Amount::from_sat(intent.inputs[0].value_sat),
+                    EcdsaSighashType::All,
+                )
+                .expect("independent sighash");
+
+            let message = Message::from(sighash);
+
+            secp.verify_ecdsa(&message, &signature, &witness_public_key)
+                .expect("ECDSA signature verifies");
+
+            xpriv.private_key.non_secure_erase();
+        }
+
+        #[test]
+        fn two_input_transaction_signs_every_input() {
+            let intent = BitcoinV1TransactionIntent {
+                destination_address: CHANGE_ADDRESS.to_string(),
+                amount_sat: 70_000,
+                change_address: Some(RECEIVE_ADDRESS.to_string()),
+                change_sat: 29_000,
+                inputs: vec![input("11", 0, 60_000), input("22", 1, 40_000)],
+            };
+
+            let signed =
+                sign_bitcoin_v1_transaction(&seed(), &intent).expect("two-input signing succeeds");
+
+            let tx: Transaction =
+                deserialize(&decode_hex(&signed.signed_tx_hex)).expect("transaction decodes");
+
+            assert_eq!(tx.input.len(), 2);
+
+            for input in &tx.input {
+                assert!(input.script_sig.is_empty());
+
+                let witness = input.witness.to_vec();
+                assert_eq!(witness.len(), 2);
+
+                assert_eq!(
+                    *witness[0].last().expect("sighash byte"),
+                    EcdsaSighashType::All.to_u32() as u8
+                );
+
+                assert_eq!(witness[1].len(), 33);
+            }
+        }
+    }
+}
+
 /// Ethereum V1 EIP-1559 (type 0x02) transaction signing, Stage 5G.1.
 ///
 /// Rust-internal only: not exposed via UniFFI directly (see `mod ffi`'s
